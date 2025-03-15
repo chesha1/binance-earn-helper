@@ -1,0 +1,25 @@
+{
+	"name": "binance-earn-helper",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"build": "npm run clean && tsc",
+		"clean": "rm -rf dist"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20250303.0",
+		"@eslint/js": "^9.22.0",
+		"@types/crypto-js": "^4.2.2",
+		"@types/node": "^22.13.1",
+		"eslint": "^9.22.0",
+		"typescript": "^5.7.2",
+		"typescript-eslint": "^8.26.0",
+		"wrangler": "^3.114.0"
+	},
+	"dependencies": {
+		"@binance/connector-typescript": "^0.3.15"
+	}
+}
