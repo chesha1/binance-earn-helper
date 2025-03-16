@@ -9,13 +9,36 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     // 获取现货、理财活期、资金账户账户余额
     const [spotWalletBalance, earnWalletBalance, fundingWalletBalance] = await Promise.all([
         client.userAsset(),
-        client.getFlexibleProductPosition(),
+        getEarnWalletBalance(client),
         client.fundingWallet()
     ])
 
     // 汇总各个币可用余额
     const availableBalance = calculateAvailableBalance(spotWalletBalance, earnWalletBalance, fundingWalletBalance)
+
     return availableBalance
+}
+
+// 查询理财账户活期可用余额
+// 防止持有币的种类太多，手动指定类型查三次然后合并，其他两种账户没有分页的参数，看来是会全量返回，就不手动封装了
+async function getEarnWalletBalance(client: Spot) {
+    const [resUSDT, resUSDC, resFDUSD] = await Promise.all([
+        client.getFlexibleProductPosition({
+            asset: 'USDT'
+        }),
+        client.getFlexibleProductPosition({
+            asset: 'USDC'
+        }),
+        client.getFlexibleProductPosition({
+            asset: 'FDUSD'
+        })
+    ]);
+    const rows = [...resUSDT.rows, ...resUSDC.rows, ...resFDUSD.rows];
+    const res = {
+        rows: rows,
+        total: rows.length
+    }
+    return res
 }
 
 // 计算可用"余额"，这里的余额指的是可以调用的数字，在后续的每一次调仓中，会减少
