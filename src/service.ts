@@ -1,22 +1,68 @@
-import { Spot } from '@binance/connector-typescript';
+import { Spot, RestWalletTypes, RestSimpleEarnTypes } from '@binance/connector-typescript';
+import { Decimal } from 'decimal.js';
+import { AvailableBalance } from './types';
 
 export async function handler(API_KEY: string, API_SECRET: string) {
     const BASE_URL = 'https://api.binance.com';
     const client = new Spot(API_KEY, API_SECRET, { baseURL: BASE_URL });
 
-    const fundingWalletBalance = await getFundingWalletBalance(client)
-    const earnWalletBalance = await getEarnWalletBalance(client)
-    return earnWalletBalance
+    // 获取现货、理财活期、资金账户账户余额
+    const [spotWalletBalance, earnWalletBalance, fundingWalletBalance] = await Promise.all([
+        client.userAsset(),
+        client.getFlexibleProductPosition(),
+        client.fundingWallet()
+    ])
+
+    // 汇总各个币可用余额
+    const availableBalance = calculateAvailableBalance(spotWalletBalance, earnWalletBalance, fundingWalletBalance)
+    return availableBalance
 }
 
-// 获取资金账户余额
-async function getFundingWalletBalance(client: Spot) {
-    const accountInfo = await client.fundingWallet()
-    return accountInfo;
-}
+// 计算可用"余额"，这里的余额指的是可以调用的数字，在后续的每一次调仓中，会减少
+async function calculateAvailableBalance(
+    spotWalletBalance: RestWalletTypes.userAssetResponse[],
+    earnWalletBalance: RestSimpleEarnTypes.getFlexibleProductPositionResponse,
+    fundingWalletBalance: RestWalletTypes.fundingWalletResponse[]) {
 
-// 获取理财账户活期余额
-async function getEarnWalletBalance(client: Spot) {
-    const accountInfo = await client.getFlexibleProductPosition()
-    return accountInfo
+    // 初始化可用余额对象
+    const availableBalance: AvailableBalance = {
+        USDT: new Decimal(0),
+        USDC: new Decimal(0),
+        FDUSD: new Decimal(0)
+    };
+
+    // 资金账户稳定币余额
+    fundingWalletBalance.forEach((item) => {
+        if (item.asset === 'USDT') {
+            availableBalance.USDT = new Decimal(item.free || 0);
+        } else if (item.asset === 'USDC') {
+            availableBalance.USDC = new Decimal(item.free || 0);
+        } else if (item.asset === 'FDUSD') {
+            availableBalance.FDUSD = new Decimal(item.free || 0);
+        }
+    });
+
+    // 理财账户活期余额
+    earnWalletBalance.rows.forEach((item) => {
+        if (item.asset === 'USDT') {
+            availableBalance.USDT = availableBalance.USDT.plus(new Decimal(item.totalAmount || 0));
+        } else if (item.asset === 'USDC') {
+            availableBalance.USDC = availableBalance.USDC.plus(new Decimal(item.totalAmount || 0));
+        } else if (item.asset === 'FDUSD') {
+            availableBalance.FDUSD = availableBalance.FDUSD.plus(new Decimal(item.totalAmount || 0));
+        }
+    });
+
+    // 现货账户余额
+    spotWalletBalance.forEach((item) => {
+        if (item.asset === 'USDT') {
+            availableBalance.USDT = availableBalance.USDT.plus(new Decimal(item.free || 0));
+        } else if (item.asset === 'USDC') {
+            availableBalance.USDC = availableBalance.USDC.plus(new Decimal(item.free || 0));
+        } else if (item.asset === 'FDUSD') {
+            availableBalance.FDUSD = availableBalance.FDUSD.plus(new Decimal(item.free || 0));
+        }
+    });
+
+    return availableBalance;
 }
