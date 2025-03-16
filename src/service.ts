@@ -2,7 +2,7 @@ import { Spot, RestWalletTypes, RestSimpleEarnTypes } from '@binance/connector-t
 import { Decimal } from 'decimal.js';
 import { AvailableBalance } from './types';
 
-export async function handler(API_KEY: string, API_SECRET: string) {
+export async function handler(API_KEY: string, API_SECRET: string, LOCKED_ASSETS: boolean) {
     const BASE_URL = 'https://api.binance.com';
     const client = new Spot(API_KEY, API_SECRET, { baseURL: BASE_URL });
 
@@ -16,7 +16,10 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     // 汇总各个币可用余额
     const availableBalance = calculateAvailableBalance(spotWalletBalance, earnWalletBalance, fundingWalletBalance)
 
-    return availableBalance
+    // 查询稳定币理财产品列表
+    const earnProductList = await getEarnProductList(client, LOCKED_ASSETS)
+
+    return earnProductList
 }
 
 // 查询理财账户活期可用余额
@@ -89,3 +92,74 @@ async function calculateAvailableBalance(
 
     return availableBalance;
 }
+
+// 查询稳定币理财产品列表，不包含存贷易产品
+async function getEarnProductList(client: Spot, LOCKED_ASSETS: boolean) {
+    // 定义产品项目接口
+    interface ProductItem {
+        isSoldOut?: boolean;
+        detail?: {
+            isSoldOut?: boolean;
+        };
+    }
+
+    const [resFlexibleUSDT, resFlexibleUSDC, resFlexibleFDUSD] = await Promise.all([
+        client.getSimpleEarnFlexibleProductList({
+            asset: 'USDT'
+        }),
+        client.getSimpleEarnFlexibleProductList({
+            asset: 'USDC'
+        }),
+        client.getSimpleEarnFlexibleProductList({
+            asset: 'FDUSD'
+        })
+    ]);
+
+    // 只有当LOCKED_ASSETS为true时，才查询锁定产品
+    let resLockedUSDT: RestSimpleEarnTypes.getSimpleEarnLockedProductListResponse = { rows: [], total: 0 };
+    let resLockedUSDC: RestSimpleEarnTypes.getSimpleEarnLockedProductListResponse = { rows: [], total: 0 };
+    let resLockedFDUSD: RestSimpleEarnTypes.getSimpleEarnLockedProductListResponse = { rows: [], total: 0 };
+
+    if (LOCKED_ASSETS) {
+        [resLockedUSDT, resLockedUSDC, resLockedFDUSD] = await Promise.all([
+            client.getSimpleEarnLockedProductList({
+                asset: 'USDT'
+            }),
+            client.getSimpleEarnLockedProductList({
+                asset: 'USDC'
+            }),
+            client.getSimpleEarnLockedProductList({
+                asset: 'FDUSD'
+            }),
+        ]);
+    }
+
+    // 过滤掉已售罄(isSoldOut = true)的产品
+    const filterNotSoldOut = (item: ProductItem) => {
+        // 检查直接属性isSoldOut
+        if (item.isSoldOut === true) {
+            return false;
+        }
+        // 检查detail.isSoldOut
+        if (item.detail && item.detail.isSoldOut === true) {
+            return false;
+        }
+        return true;
+    };
+
+    const filteredRows = [
+        ...resFlexibleUSDT.rows.filter(filterNotSoldOut),
+        ...resFlexibleUSDC.rows.filter(filterNotSoldOut),
+        ...resFlexibleFDUSD.rows.filter(filterNotSoldOut),
+        ...resLockedUSDT.rows.filter(filterNotSoldOut),
+        ...resLockedUSDC.rows.filter(filterNotSoldOut),
+        ...resLockedFDUSD.rows.filter(filterNotSoldOut)
+    ];
+
+    const res = {
+        rows: filteredRows,
+        total: filteredRows.length
+    }
+    return res
+}
+
