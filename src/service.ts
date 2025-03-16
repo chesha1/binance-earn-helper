@@ -2,6 +2,9 @@ import { Spot, RestWalletTypes, RestSimpleEarnTypes } from '@binance/connector-t
 import { Decimal } from 'decimal.js';
 import { AvailableBalance } from './types';
 
+// 定义支持的稳定币数组
+export const STABLE_COINS = ['USDT', 'USDC', 'FDUSD'];
+
 export async function handler(API_KEY: string, API_SECRET: string, LOCKED_ASSETS: boolean) {
     const BASE_URL = 'https://api.binance.com';
     const client = new Spot(API_KEY, API_SECRET, { baseURL: BASE_URL });
@@ -23,20 +26,19 @@ export async function handler(API_KEY: string, API_SECRET: string, LOCKED_ASSETS
 }
 
 // 查询理财账户活期可用余额
-// 防止持有币的种类太多，手动指定类型查三次然后合并，其他两种账户没有分页的参数，看来是会全量返回，就不手动封装了
 async function getEarnWalletBalance(client: Spot) {
-    const [resUSDT, resUSDC, resFDUSD] = await Promise.all([
+    const requests = STABLE_COINS.map(coin =>
         client.getFlexibleProductPosition({
-            asset: 'USDT'
-        }),
-        client.getFlexibleProductPosition({
-            asset: 'USDC'
-        }),
-        client.getFlexibleProductPosition({
-            asset: 'FDUSD'
+            asset: coin
         })
-    ]);
-    const rows = [...resUSDT.rows, ...resUSDC.rows, ...resFDUSD.rows];
+    );
+
+    const responses = await Promise.all(requests);
+    console.log(responses)
+
+    // 合并所有响应的rows
+    const rows = responses.flatMap(res => res.rows);
+
     const res = {
         rows: rows,
         total: rows.length
@@ -45,48 +47,38 @@ async function getEarnWalletBalance(client: Spot) {
 }
 
 // 计算可用"余额"，这里的余额指的是可以调用的数字，在后续的每一次调仓中，会减少
+// 可能不需要了，以后三个账户单独计算余额
 async function calculateAvailableBalance(
     spotWalletBalance: RestWalletTypes.userAssetResponse[],
     earnWalletBalance: RestSimpleEarnTypes.getFlexibleProductPositionResponse,
     fundingWalletBalance: RestWalletTypes.fundingWalletResponse[]) {
 
     // 初始化可用余额对象
-    const availableBalance: AvailableBalance = {
-        USDT: new Decimal(0),
-        USDC: new Decimal(0),
-        FDUSD: new Decimal(0)
-    };
+    const availableBalance: AvailableBalance = {};
+
+    // 为每种稳定币初始化余额为0
+    STABLE_COINS.forEach(coin => {
+        availableBalance[coin] = new Decimal(0);
+    });
 
     // 资金账户稳定币余额
     fundingWalletBalance.forEach((item) => {
-        if (item.asset === 'USDT') {
-            availableBalance.USDT = new Decimal(item.free || 0);
-        } else if (item.asset === 'USDC') {
-            availableBalance.USDC = new Decimal(item.free || 0);
-        } else if (item.asset === 'FDUSD') {
-            availableBalance.FDUSD = new Decimal(item.free || 0);
+        if (STABLE_COINS.includes(item.asset)) {
+            availableBalance[item.asset] = new Decimal(item.free || 0);
         }
     });
 
     // 理财账户活期余额
     earnWalletBalance.rows.forEach((item) => {
-        if (item.asset === 'USDT') {
-            availableBalance.USDT = availableBalance.USDT.plus(new Decimal(item.totalAmount || 0));
-        } else if (item.asset === 'USDC') {
-            availableBalance.USDC = availableBalance.USDC.plus(new Decimal(item.totalAmount || 0));
-        } else if (item.asset === 'FDUSD') {
-            availableBalance.FDUSD = availableBalance.FDUSD.plus(new Decimal(item.totalAmount || 0));
+        if (STABLE_COINS.includes(item.asset)) {
+            availableBalance[item.asset] = availableBalance[item.asset].plus(new Decimal(item.totalAmount || 0));
         }
     });
 
     // 现货账户余额
     spotWalletBalance.forEach((item) => {
-        if (item.asset === 'USDT') {
-            availableBalance.USDT = availableBalance.USDT.plus(new Decimal(item.free || 0));
-        } else if (item.asset === 'USDC') {
-            availableBalance.USDC = availableBalance.USDC.plus(new Decimal(item.free || 0));
-        } else if (item.asset === 'FDUSD') {
-            availableBalance.FDUSD = availableBalance.FDUSD.plus(new Decimal(item.free || 0));
+        if (STABLE_COINS.includes(item.asset)) {
+            availableBalance[item.asset] = availableBalance[item.asset].plus(new Decimal(item.free || 0));
         }
     });
 
@@ -103,35 +95,26 @@ async function getEarnProductList(client: Spot, LOCKED_ASSETS: boolean) {
         };
     }
 
-    const [resFlexibleUSDT, resFlexibleUSDC, resFlexibleFDUSD] = await Promise.all([
+    // 查询灵活产品
+    const flexibleRequests = STABLE_COINS.map(coin =>
         client.getSimpleEarnFlexibleProductList({
-            asset: 'USDT'
-        }),
-        client.getSimpleEarnFlexibleProductList({
-            asset: 'USDC'
-        }),
-        client.getSimpleEarnFlexibleProductList({
-            asset: 'FDUSD'
+            asset: coin
         })
-    ]);
+    );
 
-    // 只有当LOCKED_ASSETS为true时，才查询锁定产品
-    let resLockedUSDT: RestSimpleEarnTypes.getSimpleEarnLockedProductListResponse = { rows: [], total: 0 };
-    let resLockedUSDC: RestSimpleEarnTypes.getSimpleEarnLockedProductListResponse = { rows: [], total: 0 };
-    let resLockedFDUSD: RestSimpleEarnTypes.getSimpleEarnLockedProductListResponse = { rows: [], total: 0 };
+    const flexibleResponses = await Promise.all(flexibleRequests);
+
+    // 只有当LOCKED_ASSETS为true时，才查询定期产品
+    let lockedResponses: RestSimpleEarnTypes.getSimpleEarnLockedProductListResponse[] = [];
 
     if (LOCKED_ASSETS) {
-        [resLockedUSDT, resLockedUSDC, resLockedFDUSD] = await Promise.all([
+        const lockedRequests = STABLE_COINS.map(coin =>
             client.getSimpleEarnLockedProductList({
-                asset: 'USDT'
-            }),
-            client.getSimpleEarnLockedProductList({
-                asset: 'USDC'
-            }),
-            client.getSimpleEarnLockedProductList({
-                asset: 'FDUSD'
-            }),
-        ]);
+                asset: coin
+            })
+        );
+
+        lockedResponses = await Promise.all(lockedRequests);
     }
 
     // 过滤掉已售罄(isSoldOut = true)的产品
@@ -147,13 +130,10 @@ async function getEarnProductList(client: Spot, LOCKED_ASSETS: boolean) {
         return true;
     };
 
+    // 合并所有灵活产品和锁定产品的rows，并过滤掉已售罄的产品
     const filteredRows = [
-        ...resFlexibleUSDT.rows.filter(filterNotSoldOut),
-        ...resFlexibleUSDC.rows.filter(filterNotSoldOut),
-        ...resFlexibleFDUSD.rows.filter(filterNotSoldOut),
-        ...resLockedUSDT.rows.filter(filterNotSoldOut),
-        ...resLockedUSDC.rows.filter(filterNotSoldOut),
-        ...resLockedFDUSD.rows.filter(filterNotSoldOut)
+        ...flexibleResponses.flatMap(res => res.rows.filter(filterNotSoldOut)),
+        ...lockedResponses.flatMap(res => res.rows.filter(filterNotSoldOut))
     ];
 
     const res = {

@@ -6,8 +6,4 @@ export interface Env {
     LOCKED_ASSETS: string; // 是否购买定期理财
 }
 
-export interface AvailableBalance {
-    USDT: Decimal;
-    USDC: Decimal;
-    FDUSD: Decimal;
-}
+export type AvailableBalance = Record<string, Decimal>;
