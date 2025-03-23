@@ -1,6 +1,6 @@
 import { Spot, RestSimpleEarnTypes } from '@binance/connector-typescript';
 import { Decimal } from 'decimal.js';
-import { ProcessedEarnProduct } from './types';
+import { ProcessedEarnProduct, AvailableBalance } from './types';
 
 // 定义支持的稳定币数组
 export const STABLE_COINS = ['USDT', 'USDC', 'FDUSD'];
@@ -17,11 +17,28 @@ export async function handler(API_KEY: string, API_SECRET: string) {
         client.fundingWallet()
     ])
 
+    // 处理账户可用余额
+    // const spotAvailableBalance: AvailableBalance = {}
+    // const earnAvailableBalance: AvailableBalance = {}
+    // const fundingAvailableBalance: AvailableBalance = {}
+    // spotWalletBalance.forEach((item) => {
+    //     spotAvailableBalance[item.asset] = new Decimal(item.free)
+    // })
+    // earnWalletBalance.forEach((item) => {
+    //     earnAvailableBalance[item.asset] = new Decimal(item.totalAmount)
+    // })
+    // fundingWalletBalance.forEach((item) => {
+    //     fundingAvailableBalance[item.asset] = new Decimal(item.free)
+    // })
+
     // 查询稳定币理财产品列表
     const earnProductList = await getEarnProductList(client)
 
     // 处理 earnProductList 并按收益率排序
     const processedProducts = processEarnProductList(earnProductList)
+
+    // 依次处理每个理财产品
+    // await handleEarnProducts(client, processedProducts, spotAvailableBalance, earnAvailableBalance, fundingAvailableBalance)
 
     return processedProducts
 }
@@ -35,16 +52,11 @@ async function getEarnWalletBalance(client: Spot) {
     );
 
     const responses = await Promise.all(requests);
-    console.log(responses)
 
     // 合并所有响应的 rows
     const rows = responses.flatMap(res => res.rows);
 
-    const res = {
-        rows: rows,
-        total: rows.length
-    }
-    return res
+    return rows
 }
 
 // 查询稳定币理财产品列表，只包含活期产品
@@ -123,8 +135,80 @@ function processEarnProductList(earnProductList: {
         return new Decimal(b.latestAnnualPercentageRate).minus(new Decimal(a.latestAnnualPercentageRate)).toNumber();
     });
 
-    return {
-        rows: processedRows,
-        total: processedRows.length
-    };
+    return processedRows
 }
+
+// // 依次处理每个理财产品
+// async function handleEarnProducts(client: Spot, productList: ProcessedEarnProduct[],
+//     spotAvailableBalance: AvailableBalance,
+//     earnAvailableBalance: AvailableBalance,
+//     fundingAvailableBalance: AvailableBalance
+// ) {
+//     let currentSpotAvailableBalance = spotAvailableBalance
+//     let currentEarnAvailableBalance = earnAvailableBalance
+//     let currentFundingAvailableBalance = fundingAvailableBalance
+//     productList.forEach(async (product) => {
+//         const productId = product.productId
+//         const asset = product.asset
+//         let requiredAmount = new Decimal(0)
+
+//         // 检查product.tier是否存在，并解析X-YZ格式
+//         if (product.tier) {
+//             const tierPattern = /(\d+)-(\d+)([A-Z]+)/;
+//             const match = product.tier.match(tierPattern);
+
+//             if (match && STABLE_COINS.includes(match[3])) {
+//                 const startAmount = match[1];
+//                 const endAmount = match[2];
+//                 requiredAmount = new Decimal(endAmount).minus(new Decimal(startAmount))
+//             }
+
+//             // 检查是否已申购足够的金额
+//             // 如果这个 asset 存在，并给小于 requiredAmount，或者不存在，则申购
+//             // 如果这个 asset 存在，并给大于 requiredAmount，则不赎回多余的部分
+//             if (earnAvailableBalance[asset] && earnAvailableBalance[asset].lt(requiredAmount)) {
+//                 // 申购
+//                 await subscribeEarnProduct(client, asset, productId, requiredAmount,
+//                     currentSpotAvailableBalance,
+//                     currentEarnAvailableBalance,
+//                     currentFundingAvailableBalance
+//                 )
+//                 // 更新 AvailableBalance
+//                 // TODO
+//             }
+//             else {
+//                 // 赎回 TODO
+//             }
+
+//             console.log('requiredAmount: ', requiredAmount)
+//         }
+//         else {
+//             // 当tier不存在时，余额全部申购这个产品
+//             await subscribeEarnProduct(client, asset, productId, requiredAmount,
+//                 currentSpotAvailableBalance,
+//                 currentEarnAvailableBalance,
+//                 currentFundingAvailableBalance
+//             )
+//         }
+//     })
+// }
+// // 申购理财产品
+// // TODO
+// async function subscribeEarnProduct(client: Spot, asset: string, productId: string, amount: Decimal,
+//     spotAvailableBalance: AvailableBalance,
+//     earnAvailableBalance: AvailableBalance,
+//     fundingAvailableBalance: AvailableBalance
+// ) {
+//     let requiredAmount = amount
+
+//     // 计算可用金额
+//     let availableBalance = spotAvailableBalance[asset].plus(fundingAvailableBalance[asset])
+//     // 资金量不足时，兑换后申购
+//     if (availableBalance.lt(requiredAmount)) {
+//         // 兑换
+//         // TODO
+//     }
+//     // 现货账户申购
+//     client.subscribeFlexibleProduct()
+//     let spotSubscribeAmount = requiredAmount.minus(availableBalance)
+// }
