@@ -5,7 +5,7 @@ import { AvailableBalance } from './types';
 // 定义支持的稳定币数组
 export const STABLE_COINS = ['USDT', 'USDC', 'FDUSD'];
 
-export async function handler(API_KEY: string, API_SECRET: string, LOCKED_ASSETS: boolean) {
+export async function handler(API_KEY: string, API_SECRET: string) {
     const BASE_URL = 'https://api.binance.com';
     const client = new Spot(API_KEY, API_SECRET, { baseURL: BASE_URL });
 
@@ -18,7 +18,7 @@ export async function handler(API_KEY: string, API_SECRET: string, LOCKED_ASSETS
     ])
 
     // 查询稳定币理财产品列表
-    const earnProductList = await getEarnProductList(client, LOCKED_ASSETS)
+    const earnProductList = await getEarnProductList(client)
 
     // 处理 earnProductList 并按收益率排序
     const processedProducts = processEarnProductList(earnProductList)
@@ -37,7 +37,7 @@ async function getEarnWalletBalance(client: Spot) {
     const responses = await Promise.all(requests);
     console.log(responses)
 
-    // 合并所有响应的rows
+    // 合并所有响应的 rows
     const rows = responses.flatMap(res => res.rows);
 
     const res = {
@@ -47,17 +47,9 @@ async function getEarnWalletBalance(client: Spot) {
     return res
 }
 
-// 查询稳定币理财产品列表，不包含存贷易产品
-async function getEarnProductList(client: Spot, LOCKED_ASSETS: boolean) {
-    // 定义产品项目接口
-    interface ProductItem {
-        isSoldOut?: boolean;
-        detail?: {
-            isSoldOut?: boolean;
-        };
-    }
-
-    // 查询灵活产品
+// 查询稳定币理财产品列表，只包含活期产品
+async function getEarnProductList(client: Spot) {
+    // 查询活期产品
     const flexibleRequests = STABLE_COINS.map(coin =>
         client.getSimpleEarnFlexibleProductList({
             asset: coin
@@ -66,37 +58,17 @@ async function getEarnProductList(client: Spot, LOCKED_ASSETS: boolean) {
 
     const flexibleResponses = await Promise.all(flexibleRequests);
 
-    // 只有当LOCKED_ASSETS为true时，才查询定期产品
-    let lockedResponses: RestSimpleEarnTypes.getSimpleEarnLockedProductListResponse[] = [];
-
-    if (LOCKED_ASSETS) {
-        const lockedRequests = STABLE_COINS.map(coin =>
-            client.getSimpleEarnLockedProductList({
-                asset: coin
-            })
-        );
-
-        lockedResponses = await Promise.all(lockedRequests);
-    }
-
     // 过滤掉已售罄(isSoldOut = true)的产品
-    const filterNotSoldOut = (item: ProductItem) => {
+    const filterNotSoldOut = (item: RestSimpleEarnTypes.getSimpleEarnFlexibleProductListRows) => {
         // 检查直接属性isSoldOut
         if (item.isSoldOut === true) {
-            return false;
-        }
-        // 检查detail.isSoldOut
-        if (item.detail && item.detail.isSoldOut === true) {
             return false;
         }
         return true;
     };
 
-    // 合并所有灵活产品和锁定产品的rows，并过滤掉已售罄的产品
-    const filteredRows = [
-        ...flexibleResponses.flatMap(res => res.rows.filter(filterNotSoldOut)),
-        ...lockedResponses.flatMap(res => res.rows.filter(filterNotSoldOut))
-    ];
+    // 过滤掉已售罄的产品
+    const filteredRows = flexibleResponses.flatMap(res => res.rows.filter(filterNotSoldOut));
 
     const res = {
         rows: filteredRows,
@@ -107,7 +79,7 @@ async function getEarnProductList(client: Spot, LOCKED_ASSETS: boolean) {
 
 // 处理理财产品列表，展开 tierAnnualPercentageRate 并排序
 function processEarnProductList(earnProductList: {
-    rows: any[];
+    rows: RestSimpleEarnTypes.getSimpleEarnFlexibleProductListRows[];
     total: number;
 }) {
     // 定义处理后的产品项目接口
