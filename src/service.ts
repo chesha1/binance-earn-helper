@@ -1,6 +1,6 @@
 import { Spot, RestWalletTypes, RestSimpleEarnTypes } from '@binance/connector-typescript';
 import { Decimal } from 'decimal.js';
-import { AvailableBalance } from './types';
+import { AvailableBalance, ProcessedEarnProduct } from './types';
 
 // 定义支持的稳定币数组
 export const STABLE_COINS = ['USDT', 'USDC', 'FDUSD'];
@@ -82,12 +82,6 @@ function processEarnProductList(earnProductList: {
     rows: RestSimpleEarnTypes.getSimpleEarnFlexibleProductListRows[];
     total: number;
 }) {
-    // 定义处理后的产品项目接口
-    interface ProcessedEarnProduct {
-        [key: string]: any; // 允许任意属性
-        latestAnnualPercentageRate: string; // 最新年化收益率
-        tier?: string; // 可选的 tier 属性
-    }
 
     const processedRows: ProcessedEarnProduct[] = [];
 
@@ -95,32 +89,31 @@ function processEarnProductList(earnProductList: {
     earnProductList.rows.forEach((item) => {
         // 如果不存在 tierAnnualPercentageRate，直接添加原始项
         if (!item.tierAnnualPercentageRate) {
-            processedRows.push(item as ProcessedEarnProduct);
+            // 创建一个不包含tierAnnualPercentageRate属性的新对象（使用类型断言避免delete的lint错误）
+            const { tierAnnualPercentageRate, ...cleanItem } = item;
+            processedRows.push(cleanItem as ProcessedEarnProduct);
             return;
         }
 
         // 对于有 tierAnnualPercentageRate 的项目
         // 1. 首先创建一个保留原始 latestAnnualPercentageRate 的项目（不添加额外利率）
-        const baseItem: ProcessedEarnProduct = { ...item };
-        delete baseItem.tierAnnualPercentageRate; // 删除 tierAnnualPercentageRate 属性
-        processedRows.push(baseItem);
+        const { tierAnnualPercentageRate, ...baseItem } = item;
+        processedRows.push(baseItem as ProcessedEarnProduct);
 
         // 2. 为 tierAnnualPercentageRate 中的每个键值对创建单独的项目
         Object.entries(item.tierAnnualPercentageRate).forEach(([tier, rate]) => {
-            // 创建新项，复制原始项的所有属性
-            const newItem: ProcessedEarnProduct = { ...item };
-            // 删除 tierAnnualPercentageRate 属性
-            delete newItem.tierAnnualPercentageRate;
-            
+            // 创建新项，复制原始项的所有属性，但不包含tierAnnualPercentageRate
+            const { tierAnnualPercentageRate: _, ...newItem } = item;
+
             // 计算新的年化收益率（原始值加上 tier 对应的值）
-            newItem.latestAnnualPercentageRate = 
+            newItem.latestAnnualPercentageRate =
                 (parseFloat(item.latestAnnualPercentageRate) + parseFloat(rate as string)).toString();
-            
-            // 添加 tier 属性保存键名
-            newItem.tier = tier;
-            
+
+            // 添加 tier 属性保存键名（使用类型断言避免tier属性不存在的错误）
+            (newItem as ProcessedEarnProduct).tier = tier;
+
             // 添加到处理后的数组
-            processedRows.push(newItem);
+            processedRows.push(newItem as ProcessedEarnProduct);
         });
     });
 
