@@ -106,8 +106,9 @@ function processEarnProductList(earnProductList: {
             const { tierAnnualPercentageRate: _, ...newItem } = item;
 
             // 计算新的年化收益率（原始值加上 tier 对应的值）
-            newItem.latestAnnualPercentageRate =
-                (parseFloat(item.latestAnnualPercentageRate) + parseFloat(rate as string)).toString();
+            newItem.latestAnnualPercentageRate = new Decimal(item.latestAnnualPercentageRate)
+                .plus(new Decimal(rate as string))
+                .toString();
 
             // 添加 tier 属性保存键名（使用类型断言避免tier属性不存在的错误）
             (newItem as ProcessedEarnProduct).tier = tier;
@@ -119,7 +120,7 @@ function processEarnProductList(earnProductList: {
 
     // 按 latestAnnualPercentageRate 从高到低排序
     processedRows.sort((a, b) => {
-        return parseFloat(b.latestAnnualPercentageRate) - parseFloat(a.latestAnnualPercentageRate);
+        return new Decimal(b.latestAnnualPercentageRate).minus(new Decimal(a.latestAnnualPercentageRate)).toNumber();
     });
 
     return {
