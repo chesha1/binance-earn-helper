@@ -1,4 +1,3 @@
-import { Decimal } from 'decimal.js';
 import { RestSimpleEarnTypes } from '@binance/connector-typescript';
 
 export interface Env {
@@ -6,8 +5,6 @@ export interface Env {
     API_SECRET: string;
     LOCKED_ASSETS: string; // 是否购买定期理财
 }
-
-export type AvailableBalance = Record<string, Decimal>;
 
 // 定义处理后的产品项目接口
 export type ProcessedEarnProduct = Omit<RestSimpleEarnTypes.getSimpleEarnFlexibleProductListRows, 'tierAnnualPercentageRate'> & {

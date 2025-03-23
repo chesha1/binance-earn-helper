@@ -1,6 +1,6 @@
-import { Spot, RestWalletTypes, RestSimpleEarnTypes } from '@binance/connector-typescript';
+import { Spot, RestSimpleEarnTypes } from '@binance/connector-typescript';
 import { Decimal } from 'decimal.js';
-import { AvailableBalance, ProcessedEarnProduct } from './types';
+import { ProcessedEarnProduct } from './types';
 
 // 定义支持的稳定币数组
 export const STABLE_COINS = ['USDT', 'USDC', 'FDUSD'];
