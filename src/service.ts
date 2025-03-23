@@ -1,7 +1,7 @@
 import { Spot, RestSimpleEarnTypes } from '@binance/connector-typescript';
 import { Decimal } from 'decimal.js';
 import { ProcessedEarnProduct, AvailableBalance } from './types';
-
+import { delayMs } from './utils';
 // 定义支持的稳定币数组
 export const STABLE_COINS = ['USDT', 'USDC', 'FDUSD'];
 
@@ -9,13 +9,10 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     const BASE_URL = 'https://api.binance.com';
     const client = new Spot(API_KEY, API_SECRET, { baseURL: BASE_URL });
 
-    // 获取现货、理财活期、资金账户账户余额
-    // 现货和资金账户会返回全量数据不分页，就不单独查询再合并了
-    const [spotWalletBalance, earnWalletBalance, fundingWalletBalance] = await Promise.all([
-        client.userAsset(),
-        getEarnWalletBalance(client),
-        client.fundingWallet()
-    ])
+    // 转移所有可用稳定币到现货账户中
+    const earnWalletBalance = await getEarnWalletBalance(client)
+    const productIdList = Array.from(new Set(earnWalletBalance.map(item => item.productId)));
+    await withdrawAllStableCoins(client, productIdList)
 
     // 处理账户可用余额
     // const spotAvailableBalance: AvailableBalance = {}
@@ -40,7 +37,24 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     // 依次处理每个理财产品
     // await handleEarnProducts(client, processedProducts, spotAvailableBalance, earnAvailableBalance, fundingAvailableBalance)
 
-    return processedProducts
+    return productIdList
+}
+
+async function withdrawAllStableCoins(client: Spot, productIdList: string[]) {
+    // 赎回所有活期理财
+    for (const productId of productIdList) {
+        await client.redeemFlexibleProduct(
+            productId,
+            {
+                redeemAll: true,
+            }
+        )
+        await delayMs(3100)
+    }
+
+    // 资金账户转移到现货账户
+    // TODO
+
 }
 
 // 查询理财账户活期可用余额
