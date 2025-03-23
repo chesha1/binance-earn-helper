@@ -10,19 +10,20 @@ export async function handler(API_KEY: string, API_SECRET: string, LOCKED_ASSETS
     const client = new Spot(API_KEY, API_SECRET, { baseURL: BASE_URL });
 
     // 获取现货、理财活期、资金账户账户余额
+    // 现货和资金账户会返回全量数据不分页，就不单独查询再合并了
     const [spotWalletBalance, earnWalletBalance, fundingWalletBalance] = await Promise.all([
         client.userAsset(),
         getEarnWalletBalance(client),
         client.fundingWallet()
     ])
 
-    // 汇总各个币可用余额
-    const availableBalance = calculateAvailableBalance(spotWalletBalance, earnWalletBalance, fundingWalletBalance)
-
     // 查询稳定币理财产品列表
     const earnProductList = await getEarnProductList(client, LOCKED_ASSETS)
 
-    return earnProductList
+    // 处理 earnProductList 并按收益率排序
+    const processedProducts = processEarnProductList(earnProductList)
+
+    return processedProducts
 }
 
 // 查询理财账户活期可用余额
@@ -44,45 +45,6 @@ async function getEarnWalletBalance(client: Spot) {
         total: rows.length
     }
     return res
-}
-
-// 计算可用"余额"，这里的余额指的是可以调用的数字，在后续的每一次调仓中，会减少
-// 可能不需要了，以后三个账户单独计算余额
-async function calculateAvailableBalance(
-    spotWalletBalance: RestWalletTypes.userAssetResponse[],
-    earnWalletBalance: RestSimpleEarnTypes.getFlexibleProductPositionResponse,
-    fundingWalletBalance: RestWalletTypes.fundingWalletResponse[]) {
-
-    // 初始化可用余额对象
-    const availableBalance: AvailableBalance = {};
-
-    // 为每种稳定币初始化余额为0
-    STABLE_COINS.forEach(coin => {
-        availableBalance[coin] = new Decimal(0);
-    });
-
-    // 资金账户稳定币余额
-    fundingWalletBalance.forEach((item) => {
-        if (STABLE_COINS.includes(item.asset)) {
-            availableBalance[item.asset] = new Decimal(item.free || 0);
-        }
-    });
-
-    // 理财账户活期余额
-    earnWalletBalance.rows.forEach((item) => {
-        if (STABLE_COINS.includes(item.asset)) {
-            availableBalance[item.asset] = availableBalance[item.asset].plus(new Decimal(item.totalAmount || 0));
-        }
-    });
-
-    // 现货账户余额
-    spotWalletBalance.forEach((item) => {
-        if (STABLE_COINS.includes(item.asset)) {
-            availableBalance[item.asset] = availableBalance[item.asset].plus(new Decimal(item.free || 0));
-        }
-    });
-
-    return availableBalance;
 }
 
 // 查询稳定币理财产品列表，不包含存贷易产品
@@ -143,3 +105,60 @@ async function getEarnProductList(client: Spot, LOCKED_ASSETS: boolean) {
     return res
 }
 
+// 处理理财产品列表，展开 tierAnnualPercentageRate 并排序
+function processEarnProductList(earnProductList: {
+    rows: any[];
+    total: number;
+}) {
+    // 定义处理后的产品项目接口
+    interface ProcessedEarnProduct {
+        [key: string]: any; // 允许任意属性
+        latestAnnualPercentageRate: string; // 最新年化收益率
+        tier?: string; // 可选的 tier 属性
+    }
+
+    const processedRows: ProcessedEarnProduct[] = [];
+
+    // 处理每个产品
+    earnProductList.rows.forEach((item) => {
+        // 如果不存在 tierAnnualPercentageRate，直接添加原始项
+        if (!item.tierAnnualPercentageRate) {
+            processedRows.push(item as ProcessedEarnProduct);
+            return;
+        }
+
+        // 对于有 tierAnnualPercentageRate 的项目
+        // 1. 首先创建一个保留原始 latestAnnualPercentageRate 的项目（不添加额外利率）
+        const baseItem: ProcessedEarnProduct = { ...item };
+        delete baseItem.tierAnnualPercentageRate; // 删除 tierAnnualPercentageRate 属性
+        processedRows.push(baseItem);
+
+        // 2. 为 tierAnnualPercentageRate 中的每个键值对创建单独的项目
+        Object.entries(item.tierAnnualPercentageRate).forEach(([tier, rate]) => {
+            // 创建新项，复制原始项的所有属性
+            const newItem: ProcessedEarnProduct = { ...item };
+            // 删除 tierAnnualPercentageRate 属性
+            delete newItem.tierAnnualPercentageRate;
+            
+            // 计算新的年化收益率（原始值加上 tier 对应的值）
+            newItem.latestAnnualPercentageRate = 
+                (parseFloat(item.latestAnnualPercentageRate) + parseFloat(rate as string)).toString();
+            
+            // 添加 tier 属性保存键名
+            newItem.tier = tier;
+            
+            // 添加到处理后的数组
+            processedRows.push(newItem);
+        });
+    });
+
+    // 按 latestAnnualPercentageRate 从高到低排序
+    processedRows.sort((a, b) => {
+        return parseFloat(b.latestAnnualPercentageRate) - parseFloat(a.latestAnnualPercentageRate);
+    });
+
+    return {
+        rows: processedRows,
+        total: processedRows.length
+    };
+}
