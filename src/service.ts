@@ -1,4 +1,7 @@
-import { Spot, RestSimpleEarnTypes } from '@binance/connector-typescript';
+import { Spot } from '@binance/spot';
+import { SimpleEarn } from '@binance/simple-earn';
+import { Wallet } from '@binance/wallet';
+import { RestSimpleEarnTypes } from '@binance/connector-typescript';
 import { Decimal } from 'decimal.js';
 import { ProcessedEarnProduct, AvailableBalance } from './types';
 import { delayMs } from './utils';
@@ -6,13 +9,19 @@ import { delayMs } from './utils';
 export const STABLE_COINS = ['USDT', 'USDC', 'FDUSD'];
 
 export async function handler(API_KEY: string, API_SECRET: string) {
-    const BASE_URL = 'https://api.binance.com';
-    const client = new Spot(API_KEY, API_SECRET, { baseURL: BASE_URL });
+    const configurationRestAPI = {
+        apiKey: API_KEY,
+        apiSecret: API_SECRET,
+    };
+    const spotClient = new Spot({ configurationRestAPI });
+    const simpleEarnClient = new SimpleEarn({ configurationRestAPI });
+    const walletClient = new Wallet({ configurationRestAPI });
 
     // 转移所有可用稳定币到现货账户中
-    const earnWalletBalance = await getEarnWalletBalance(client)
-    const productIdList = Array.from(new Set(earnWalletBalance.map(item => item.productId)));
-    await withdrawAllStableCoins(client, productIdList)
+    const earnWalletBalance = await getEarnWalletBalance(simpleEarnClient)
+    const productIdList = Array.from(new Set(earnWalletBalance.map(item => item.productId).filter(productId => productId !== undefined)));
+    await redeemAllStableCoins(simpleEarnClient, productIdList)
+    await transferToSpot(walletClient)
 
     // 处理账户可用余额
     // const spotAvailableBalance: AvailableBalance = {}
@@ -28,11 +37,11 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     //     fundingAvailableBalance[item.asset] = new Decimal(item.free)
     // })
 
-    // 查询稳定币理财产品列表
-    const earnProductList = await getEarnProductList(client)
+    // // 查询稳定币理财产品列表
+    // const earnProductList = await getEarnProductList(client)
 
-    // 处理 earnProductList 并按收益率排序
-    const processedProducts = processEarnProductList(earnProductList)
+    // // 处理 earnProductList 并按收益率排序
+    // const processedProducts = processEarnProductList(earnProductList)
 
     // 依次处理每个理财产品
     // await handleEarnProducts(client, processedProducts, spotAvailableBalance, earnAvailableBalance, fundingAvailableBalance)
@@ -40,117 +49,150 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     return productIdList
 }
 
-async function withdrawAllStableCoins(client: Spot, productIdList: string[]) {
-    // 赎回所有活期理财
-    for (const productId of productIdList) {
-        await client.redeemFlexibleProduct(
-            productId,
-            {
-                redeemAll: true,
-            }
-        )
-        await delayMs(3100)
-    }
-
-    // 资金账户转移到现货账户
-    // TODO
-
-}
-
 // 查询理财账户活期可用余额
-async function getEarnWalletBalance(client: Spot) {
+async function getEarnWalletBalance(client: SimpleEarn) {
+    // 并行发起所有请求
     const requests = STABLE_COINS.map(coin =>
-        client.getFlexibleProductPosition({
+        client.restAPI.getFlexibleProductPosition({
             asset: coin
         })
     );
 
+    // 等待所有API请求完成
     const responses = await Promise.all(requests);
 
-    // 合并所有响应的 rows
-    const rows = responses.flatMap(res => res.rows);
+    // 等待所有response.data()调用完成
+    const dataResults = await Promise.all(responses.map(res => res.data()));
 
-    return rows
+    // 正确合并所有rows
+    const rows = dataResults.flatMap(data => data?.rows || []);
+
+    return rows;
 }
 
-// 查询稳定币理财产品列表，只包含活期产品
-async function getEarnProductList(client: Spot) {
-    // 查询活期产品
-    const flexibleRequests = STABLE_COINS.map(coin =>
-        client.getSimpleEarnFlexibleProductList({
-            asset: coin
+async function redeemAllStableCoins(client: SimpleEarn, productIdList: string[]) {
+    // 赎回所有活期理财
+    for (const productId of productIdList) {
+        await client.restAPI.redeemFlexibleProduct({
+            productId,
+            redeemAll: true,
         })
+        // 文档上说每个账户最多三秒一次
+        await delayMs(3100)
+    }
+}
+
+async function transferToSpot(walletClient: Wallet) {
+    // 并行查询所有稳定币的资金账户余额
+    const walletResponses = await Promise.all(
+        STABLE_COINS.map(coin =>
+            walletClient.restAPI.fundingWallet({ asset: coin })
+        )
     );
 
-    const flexibleResponses = await Promise.all(flexibleRequests);
+    // 并行获取所有数据
+    const allBalances = await Promise.all(
+        walletResponses.map(response => response.data())
+    );
 
-    // 过滤掉已售罄(isSoldOut = true)的产品
-    const filterNotSoldOut = (item: RestSimpleEarnTypes.getSimpleEarnFlexibleProductListRows) => {
-        // 检查直接属性isSoldOut
-        if (item.isSoldOut === true) {
-            return false;
-        }
-        return true;
-    };
+    // 创建并行转账请求
+    const transferPromises = allBalances
+        .map((balances, index) => {
+            if (balances && balances.length > 0 && Number(balances[0].free) > 0) {
+                return walletClient.restAPI.userUniversalTransfer({
+                    type: 'FUNDING_MAIN',
+                    asset: STABLE_COINS[index],
+                    amount: Number(balances[0].free),
+                });
+            }
+            return null;
+        })
+        .filter(Boolean);
 
-    // 过滤掉已售罄的产品
-    const filteredRows = flexibleResponses.flatMap(res => res.rows.filter(filterNotSoldOut));
-
-    const res = {
-        rows: filteredRows,
-        total: filteredRows.length
+    // 并行执行所有转账请求
+    if (transferPromises.length > 0) {
+        await Promise.all(transferPromises);
     }
-    return res
 }
 
-// 处理理财产品列表，展开 tierAnnualPercentageRate 并排序
-function processEarnProductList(earnProductList: {
-    rows: RestSimpleEarnTypes.getSimpleEarnFlexibleProductListRows[];
-    total: number;
-}) {
+// // 查询稳定币理财产品列表，只包含活期产品
+// async function getEarnProductList(client: Spot) {
+//     // 查询活期产品
+//     const flexibleRequests = STABLE_COINS.map(coin =>
+//         client.getSimpleEarnFlexibleProductList({
+//             asset: coin
+//         })
+//     );
 
-    const processedRows: ProcessedEarnProduct[] = [];
+//     const flexibleResponses = await Promise.all(flexibleRequests);
 
-    // 处理每个产品
-    earnProductList.rows.forEach((item) => {
-        // 如果不存在 tierAnnualPercentageRate，直接添加原始项
-        if (!item.tierAnnualPercentageRate) {
-            // 创建一个不包含tierAnnualPercentageRate属性的新对象（使用类型断言避免delete的lint错误）
-            const { tierAnnualPercentageRate, ...cleanItem } = item;
-            processedRows.push(cleanItem as ProcessedEarnProduct);
-            return;
-        }
+//     // 过滤掉已售罄(isSoldOut = true)的产品
+//     const filterNotSoldOut = (item: RestSimpleEarnTypes.getSimpleEarnFlexibleProductListRows) => {
+//         // 检查直接属性isSoldOut
+//         if (item.isSoldOut === true) {
+//             return false;
+//         }
+//         return true;
+//     };
 
-        // 对于有 tierAnnualPercentageRate 的项目
-        // 1. 首先创建一个保留原始 latestAnnualPercentageRate 的项目（不添加额外利率）
-        const { tierAnnualPercentageRate, ...baseItem } = item;
-        processedRows.push(baseItem as ProcessedEarnProduct);
+//     // 过滤掉已售罄的产品
+//     const filteredRows = flexibleResponses.flatMap(res => res.rows.filter(filterNotSoldOut));
 
-        // 2. 为 tierAnnualPercentageRate 中的每个键值对创建单独的项目
-        Object.entries(item.tierAnnualPercentageRate).forEach(([tier, rate]) => {
-            // 创建新项，复制原始项的所有属性，但不包含tierAnnualPercentageRate
-            const { tierAnnualPercentageRate: _, ...newItem } = item;
+//     const res = {
+//         rows: filteredRows,
+//         total: filteredRows.length
+//     }
+//     return res
+// }
 
-            // 计算新的年化收益率（原始值加上 tier 对应的值）
-            newItem.latestAnnualPercentageRate = new Decimal(item.latestAnnualPercentageRate)
-                .plus(new Decimal(rate as string))
-                .toString();
+// // 处理理财产品列表，展开 tierAnnualPercentageRate 并排序
+// function processEarnProductList(earnProductList: {
+//     rows: RestSimpleEarnTypes.getSimpleEarnFlexibleProductListRows[];
+//     total: number;
+// }) {
 
-            // 添加 tier 属性保存键名（使用类型断言避免tier属性不存在的错误）
-            (newItem as ProcessedEarnProduct).tier = tier;
+//     const processedRows: ProcessedEarnProduct[] = [];
 
-            // 添加到处理后的数组
-            processedRows.push(newItem as ProcessedEarnProduct);
-        });
-    });
+//     // 处理每个产品
+//     earnProductList.rows.forEach((item) => {
+//         // 如果不存在 tierAnnualPercentageRate，直接添加原始项
+//         if (!item.tierAnnualPercentageRate) {
+//             // 创建一个不包含tierAnnualPercentageRate属性的新对象（使用类型断言避免delete的lint错误）
+//             const { tierAnnualPercentageRate, ...cleanItem } = item;
+//             processedRows.push(cleanItem as ProcessedEarnProduct);
+//             return;
+//         }
 
-    // 按 latestAnnualPercentageRate 从高到低排序
-    processedRows.sort((a, b) => {
-        return new Decimal(b.latestAnnualPercentageRate).minus(new Decimal(a.latestAnnualPercentageRate)).toNumber();
-    });
+//         // 对于有 tierAnnualPercentageRate 的项目
+//         // 1. 首先创建一个保留原始 latestAnnualPercentageRate 的项目（不添加额外利率）
+//         const { tierAnnualPercentageRate, ...baseItem } = item;
+//         processedRows.push(baseItem as ProcessedEarnProduct);
 
-    return processedRows
-}
+//         // 2. 为 tierAnnualPercentageRate 中的每个键值对创建单独的项目
+//         Object.entries(item.tierAnnualPercentageRate).forEach(([tier, rate]) => {
+//             // 创建新项，复制原始项的所有属性，但不包含tierAnnualPercentageRate
+//             const { tierAnnualPercentageRate: _, ...newItem } = item;
+
+//             // 计算新的年化收益率（原始值加上 tier 对应的值）
+//             newItem.latestAnnualPercentageRate = new Decimal(item.latestAnnualPercentageRate)
+//                 .plus(new Decimal(rate as string))
+//                 .toString();
+
+//             // 添加 tier 属性保存键名（使用类型断言避免tier属性不存在的错误）
+//             (newItem as ProcessedEarnProduct).tier = tier;
+
+//             // 添加到处理后的数组
+//             processedRows.push(newItem as ProcessedEarnProduct);
+//         });
+//     });
+
+//     // 按 latestAnnualPercentageRate 从高到低排序
+//     processedRows.sort((a, b) => {
+//         return new Decimal(b.latestAnnualPercentageRate).minus(new Decimal(a.latestAnnualPercentageRate)).toNumber();
+//     });
+
+//     return processedRows
+// }
 
 // // 依次处理每个理财产品
 // async function handleEarnProducts(client: Spot, productList: ProcessedEarnProduct[],

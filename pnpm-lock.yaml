@@ -11,6 +11,15 @@ importers:
       '@binance/connector-typescript':
         specifier: ^0.3.15
         version: 0.3.15
+      '@binance/simple-earn':
+        specifier: ^1.0.0
+        version: 1.0.0
+      '@binance/spot':
+        specifier: ^1.0.0
+        version: 1.0.0
+      '@binance/wallet':
+        specifier: ^1.0.0
+        version: 1.0.0
       decimal.js:
         specifier: ^10.5.0
         version: 10.5.0
@@ -42,8 +51,20 @@ importers:
 
 packages:
 
+  '@binance/common@1.0.0':
+    resolution: {integrity: sha512-JVESKj7SNfETIWTGmnitItyCpGJkDnILN1PlLuqhrUfuU9pd7iN9MUWuz7tnihqFvTEXltXVjPaJexLm4xXHqw==}
+
   '@binance/connector-typescript@0.3.15':
     resolution: {integrity: sha512-kxIEzLfLAH8klHPan+bTYXGHhkoB7UtBRGUqT0oVlDp6ZfF//1JPqbsPiDGR36/7e8lQ1W+3ifDr/8VbJhiB5g==}
+
+  '@binance/simple-earn@1.0.0':
+    resolution: {integrity: sha512-vXgwJkxNI6NXpD6QzOobIXLii+iJ8xSRumAexaUAeG29CISsOc61lARIEqMmof4EjdwfrAE5Flw7MNyRbOIpDw==}
+
+  '@binance/spot@1.0.0':
+    resolution: {integrity: sha512-wzD37NPzCwGN5KhYOxBaSnO8n9YanjTYLJm6KgIXBlc+rwzI9cBbm79uOlLcxcUIshGPAXptRNZjMa+QpnKDkQ==}
+
+  '@binance/wallet@1.0.0':
+    resolution: {integrity: sha512-VIeTFTCH4HUlt0I5ABua8oIrkqYc3sVYA11SsMxSy1mZO4wjnXodsgqiY94jZBMvE2vjQUxa46sSbZSdj6//zw==}
 
   '@cloudflare/kv-asset-handler@0.3.4':
     resolution: {integrity: sha512-YLPHc8yASwjNkmcDMQMY35yiWjoKAKnhUbPRszBRS0YgH+IXtsMp61j+yTcnCE3oO2DgP0U3iejLC8FTtKDC8Q==}
@@ -1116,10 +1137,47 @@ packages:
 
 snapshots:
 
+  '@binance/common@1.0.0':
+    dependencies:
+      axios: 1.8.3
+      ws: 8.18.0
+    transitivePeerDependencies:
+      - bufferutil
+      - debug
+      - utf-8-validate
+
   '@binance/connector-typescript@0.3.15':
     dependencies:
       axios: 1.8.3
       ws: 8.18.0
+    transitivePeerDependencies:
+      - bufferutil
+      - debug
+      - utf-8-validate
+
+  '@binance/simple-earn@1.0.0':
+    dependencies:
+      '@binance/common': 1.0.0
+      axios: 1.8.3
+    transitivePeerDependencies:
+      - bufferutil
+      - debug
+      - utf-8-validate
+
+  '@binance/spot@1.0.0':
+    dependencies:
+      '@binance/common': 1.0.0
+      axios: 1.8.3
+      ws: 8.18.0
+    transitivePeerDependencies:
+      - bufferutil
+      - debug
+      - utf-8-validate
+
+  '@binance/wallet@1.0.0':
+    dependencies:
+      '@binance/common': 1.0.0
+      axios: 1.8.3
     transitivePeerDependencies:
       - bufferutil
       - debug
