@@ -1,7 +1,6 @@
 import { Spot } from '@binance/spot';
-import { SimpleEarn } from '@binance/simple-earn';
+import { SimpleEarn, SimpleEarnRestAPI } from '@binance/simple-earn';
 import { Wallet } from '@binance/wallet';
-import { RestSimpleEarnTypes } from '@binance/connector-typescript';
 import { Decimal } from 'decimal.js';
 import { ProcessedEarnProduct, AvailableBalance } from './types';
 import { delayMs } from './utils';
@@ -18,10 +17,10 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     const walletClient = new Wallet({ configurationRestAPI });
 
     // 转移所有可用稳定币到现货账户中
-    const earnWalletBalance = await getEarnWalletBalance(simpleEarnClient)
-    const productIdList = Array.from(new Set(earnWalletBalance.map(item => item.productId).filter(productId => productId !== undefined)));
-    await redeemAllStableCoins(simpleEarnClient, productIdList)
-    await transferToSpot(walletClient)
+    // const earnWalletBalance = await getEarnWalletBalance(simpleEarnClient)
+    // const productIdList = Array.from(new Set(earnWalletBalance.map(item => item.productId).filter(productId => productId !== undefined)));
+    // await redeemAllStableCoins(simpleEarnClient, productIdList)
+    // await transferToSpot(walletClient)
 
     // 处理账户可用余额
     // const spotAvailableBalance: AvailableBalance = {}
@@ -37,8 +36,8 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     //     fundingAvailableBalance[item.asset] = new Decimal(item.free)
     // })
 
-    // // 查询稳定币理财产品列表
-    // const earnProductList = await getEarnProductList(client)
+    // 查询稳定币理财产品列表
+    const earnProductList = await getEarnProductList(simpleEarnClient)
 
     // // 处理 earnProductList 并按收益率排序
     // const processedProducts = processEarnProductList(earnProductList)
@@ -46,7 +45,7 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     // 依次处理每个理财产品
     // await handleEarnProducts(client, processedProducts, spotAvailableBalance, earnAvailableBalance, fundingAvailableBalance)
 
-    return productIdList
+    return earnProductList
 }
 
 // 查询理财账户活期可用余额
@@ -115,35 +114,36 @@ async function transferToSpot(walletClient: Wallet) {
     }
 }
 
-// // 查询稳定币理财产品列表，只包含活期产品
-// async function getEarnProductList(client: Spot) {
-//     // 查询活期产品
-//     const flexibleRequests = STABLE_COINS.map(coin =>
-//         client.getSimpleEarnFlexibleProductList({
-//             asset: coin
-//         })
-//     );
+// 查询稳定币理财产品列表，只包含活期产品
+async function getEarnProductList(client: SimpleEarn) {
+    // 查询活期产品
+    const flexibleRequests = STABLE_COINS.map(coin =>
+        client.restAPI.getSimpleEarnFlexibleProductList({
+            asset: coin
+        })
+    );
 
-//     const flexibleResponses = await Promise.all(flexibleRequests);
+    const flexibleResponses = await Promise.all(flexibleRequests);
+    const flexibleDataResults = await Promise.all(flexibleResponses.map(res => res.data()));
 
-//     // 过滤掉已售罄(isSoldOut = true)的产品
-//     const filterNotSoldOut = (item: RestSimpleEarnTypes.getSimpleEarnFlexibleProductListRows) => {
-//         // 检查直接属性isSoldOut
-//         if (item.isSoldOut === true) {
-//             return false;
-//         }
-//         return true;
-//     };
+    // 过滤掉已售罄(isSoldOut = true)的产品
+    const filterNotSoldOut = (item: SimpleEarnRestAPI.GetSimpleEarnFlexibleProductListResponseRowsInner) => {
+        // 检查直接属性isSoldOut
+        if (item.isSoldOut === true) {
+            return false;
+        }
+        return true;
+    };
 
-//     // 过滤掉已售罄的产品
-//     const filteredRows = flexibleResponses.flatMap(res => res.rows.filter(filterNotSoldOut));
+    // 过滤掉已售罄的产品
+    const filteredRows = flexibleDataResults.flatMap(res => res?.rows?.filter(filterNotSoldOut) || []);
 
-//     const res = {
-//         rows: filteredRows,
-//         total: filteredRows.length
-//     }
-//     return res
-// }
+    const res = {
+        rows: filteredRows,
+        total: filteredRows.length
+    }
+    return res
+}
 
 // // 处理理财产品列表，展开 tierAnnualPercentageRate 并排序
 // function processEarnProductList(earnProductList: {
