@@ -40,12 +40,12 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     const earnProductList = await getEarnProductList(simpleEarnClient)
 
     // // 处理 earnProductList 并按收益率排序
-    // const processedProducts = processEarnProductList(earnProductList)
+    const processedProducts = processEarnProductList(earnProductList)
 
     // 依次处理每个理财产品
     // await handleEarnProducts(client, processedProducts, spotAvailableBalance, earnAvailableBalance, fundingAvailableBalance)
 
-    return earnProductList
+    return processedProducts
 }
 
 // 查询理财账户活期可用余额
@@ -145,109 +145,63 @@ async function getEarnProductList(client: SimpleEarn) {
     return res
 }
 
-// // 处理理财产品列表，展开 tierAnnualPercentageRate 并排序
-// function processEarnProductList(earnProductList: {
-//     rows: RestSimpleEarnTypes.getSimpleEarnFlexibleProductListRows[];
-//     total: number;
-// }) {
+// 处理理财产品列表，展开 tierAnnualPercentageRate 并排序
+// 如果没有阶梯，就不存在 requiredAmount 这个属性
+function processEarnProductList(earnProductList: {
+    rows: SimpleEarnRestAPI.GetSimpleEarnFlexibleProductListResponseRowsInner[];
+    total: number;
+}) {
 
-//     const processedRows: ProcessedEarnProduct[] = [];
+    const processedRows: ProcessedEarnProduct[] = [];
 
-//     // 处理每个产品
-//     earnProductList.rows.forEach((item) => {
-//         // 如果不存在 tierAnnualPercentageRate，直接添加原始项
-//         if (!item.tierAnnualPercentageRate) {
-//             // 创建一个不包含tierAnnualPercentageRate属性的新对象（使用类型断言避免delete的lint错误）
-//             const { tierAnnualPercentageRate, ...cleanItem } = item;
-//             processedRows.push(cleanItem as ProcessedEarnProduct);
-//             return;
-//         }
+    // 处理每个产品
+    earnProductList.rows.forEach((item) => {
+        // 如果不存在 tierAnnualPercentageRate，直接添加原始项
+        if (!item.tierAnnualPercentageRate) {
+            // 创建一个不包含tierAnnualPercentageRate属性的新对象（使用类型断言避免delete的lint错误）
+            const { tierAnnualPercentageRate, ...cleanItem } = item;
+            processedRows.push(cleanItem as ProcessedEarnProduct);
+            return;
+        }
 
-//         // 对于有 tierAnnualPercentageRate 的项目
-//         // 1. 首先创建一个保留原始 latestAnnualPercentageRate 的项目（不添加额外利率）
-//         const { tierAnnualPercentageRate, ...baseItem } = item;
-//         processedRows.push(baseItem as ProcessedEarnProduct);
+        // 对于有 tierAnnualPercentageRate 的项目
+        // 1. 首先创建一个保留原始 latestAnnualPercentageRate 的项目（不添加额外利率）
+        const { tierAnnualPercentageRate, ...baseItem } = item;
+        processedRows.push(baseItem as ProcessedEarnProduct);
 
-//         // 2. 为 tierAnnualPercentageRate 中的每个键值对创建单独的项目
-//         Object.entries(item.tierAnnualPercentageRate).forEach(([tier, rate]) => {
-//             // 创建新项，复制原始项的所有属性，但不包含tierAnnualPercentageRate
-//             const { tierAnnualPercentageRate: _, ...newItem } = item;
+        // 2. 为 tierAnnualPercentageRate 中的每个键值对创建单独的项目
+        Object.entries(item.tierAnnualPercentageRate).forEach(([tier, rate]) => {
+            // 创建新项，复制原始项的所有属性，但不包含tierAnnualPercentageRate
+            const { tierAnnualPercentageRate: _, ...newItem } = item;
 
-//             // 计算新的年化收益率（原始值加上 tier 对应的值）
-//             newItem.latestAnnualPercentageRate = new Decimal(item.latestAnnualPercentageRate)
-//                 .plus(new Decimal(rate as string))
-//                 .toString();
+            // 计算新的年化收益率（原始值加上 tier 对应的值）
+            newItem.latestAnnualPercentageRate = new Decimal(item.latestAnnualPercentageRate || 0)
+                .plus(new Decimal(rate as string))
+                .toString();
 
-//             // 添加 tier 属性保存键名（使用类型断言避免tier属性不存在的错误）
-//             (newItem as ProcessedEarnProduct).tier = tier;
+            // 解析tier格式并计算requiredAmount
+            const tierPattern = /(\d+)-(\d+)([A-Z]+)/;
+            const match = tier.match(tierPattern);
 
-//             // 添加到处理后的数组
-//             processedRows.push(newItem as ProcessedEarnProduct);
-//         });
-//     });
+            if (match && STABLE_COINS.includes(match[3])) {
+                const startAmount = match[1];
+                const endAmount = match[2];
+                (newItem as ProcessedEarnProduct).requiredAmount = new Decimal(endAmount).minus(new Decimal(startAmount));
+            }
 
-//     // 按 latestAnnualPercentageRate 从高到低排序
-//     processedRows.sort((a, b) => {
-//         return new Decimal(b.latestAnnualPercentageRate).minus(new Decimal(a.latestAnnualPercentageRate)).toNumber();
-//     });
+            // 添加到处理后的数组
+            processedRows.push(newItem as ProcessedEarnProduct);
+        });
+    });
 
-//     return processedRows
-// }
+    // 按 latestAnnualPercentageRate 从高到低排序
+    processedRows.sort((a, b) => {
+        return new Decimal(b.latestAnnualPercentageRate).minus(new Decimal(a.latestAnnualPercentageRate)).toNumber();
+    });
 
-// // 依次处理每个理财产品
-// async function handleEarnProducts(client: Spot, productList: ProcessedEarnProduct[],
-//     spotAvailableBalance: AvailableBalance,
-//     earnAvailableBalance: AvailableBalance,
-//     fundingAvailableBalance: AvailableBalance
-// ) {
-//     let currentSpotAvailableBalance = spotAvailableBalance
-//     let currentEarnAvailableBalance = earnAvailableBalance
-//     let currentFundingAvailableBalance = fundingAvailableBalance
-//     productList.forEach(async (product) => {
-//         const productId = product.productId
-//         const asset = product.asset
-//         let requiredAmount = new Decimal(0)
+    return processedRows
+}
 
-//         // 检查product.tier是否存在，并解析X-YZ格式
-//         if (product.tier) {
-//             const tierPattern = /(\d+)-(\d+)([A-Z]+)/;
-//             const match = product.tier.match(tierPattern);
-
-//             if (match && STABLE_COINS.includes(match[3])) {
-//                 const startAmount = match[1];
-//                 const endAmount = match[2];
-//                 requiredAmount = new Decimal(endAmount).minus(new Decimal(startAmount))
-//             }
-
-//             // 检查是否已申购足够的金额
-//             // 如果这个 asset 存在，并给小于 requiredAmount，或者不存在，则申购
-//             // 如果这个 asset 存在，并给大于 requiredAmount，则不赎回多余的部分
-//             if (earnAvailableBalance[asset] && earnAvailableBalance[asset].lt(requiredAmount)) {
-//                 // 申购
-//                 await subscribeEarnProduct(client, asset, productId, requiredAmount,
-//                     currentSpotAvailableBalance,
-//                     currentEarnAvailableBalance,
-//                     currentFundingAvailableBalance
-//                 )
-//                 // 更新 AvailableBalance
-//                 // TODO
-//             }
-//             else {
-//                 // 赎回 TODO
-//             }
-
-//             console.log('requiredAmount: ', requiredAmount)
-//         }
-//         else {
-//             // 当tier不存在时，余额全部申购这个产品
-//             await subscribeEarnProduct(client, asset, productId, requiredAmount,
-//                 currentSpotAvailableBalance,
-//                 currentEarnAvailableBalance,
-//                 currentFundingAvailableBalance
-//             )
-//         }
-//     })
-// }
 // // 申购理财产品
 // // TODO
 // async function subscribeEarnProduct(client: Spot, asset: string, productId: string, amount: Decimal,

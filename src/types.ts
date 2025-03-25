@@ -9,7 +9,7 @@ export interface Env {
 
 // 定义处理后的产品项目接口
 export type ProcessedEarnProduct = Omit<RestSimpleEarnTypes.getSimpleEarnFlexibleProductListRows, 'tierAnnualPercentageRate'> & {
-    tier?: string; // 可选的 tier 属性
+    requiredAmount?: Decimal; // 当前阶梯需要的金额
 }
 
 export type AvailableBalance = Record<string, Decimal>;
