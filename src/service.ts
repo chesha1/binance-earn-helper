@@ -22,28 +22,42 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     // await redeemAllStableCoins(simpleEarnClient, productIdList)
     // await transferToSpot(walletClient)
 
-    // 处理账户可用余额
-    // const spotAvailableBalance: AvailableBalance = {}
-    // const earnAvailableBalance: AvailableBalance = {}
-    // const fundingAvailableBalance: AvailableBalance = {}
-    // spotWalletBalance.forEach((item) => {
-    //     spotAvailableBalance[item.asset] = new Decimal(item.free)
-    // })
-    // earnWalletBalance.forEach((item) => {
-    //     earnAvailableBalance[item.asset] = new Decimal(item.totalAmount)
-    // })
-    // fundingWalletBalance.forEach((item) => {
-    //     fundingAvailableBalance[item.asset] = new Decimal(item.free)
-    // })
-
     // 查询稳定币理财产品列表
     const earnProductList = await getEarnProductList(simpleEarnClient)
 
-    // // 处理 earnProductList 并按收益率排序
+    // 处理 earnProductList 并按收益率排序
     const processedProducts = processEarnProductList(earnProductList)
 
     // 依次处理每个理财产品
-    // await handleEarnProducts(client, processedProducts, spotAvailableBalance, earnAvailableBalance, fundingAvailableBalance)
+    for (const product of processedProducts) {
+        const spotBalance = await getSpotBalance(walletClient)
+        // 如果还有现货余额还有大于 0.1 的
+        if (Object.values(spotBalance).some(balance => balance.gt(new Decimal(0.1)))) {
+            // 阶梯产品，只满足需要的量
+            if (product.requiredAmount) {
+                const requiredAmount = product.requiredAmount
+                const asset = product.asset
+                const amount = spotBalance[asset]
+                if (amount && amount.gte(requiredAmount)) {
+                    // 对应的稳定币余额足够，直接申购
+                    await simpleEarnClient.restAPI.subscribeFlexibleProduct({
+                        productId: product.productId,
+                        amount: requiredAmount.toNumber()
+                    })
+                    await delayMs(3100)
+                } else {
+                    console.log(`没有足够余额，尝试兑换`)
+                    break
+                }
+            }
+            // 非阶梯产品，把剩下的所有余额投入该产品
+            else {
+                console.log(`没有阶梯，把剩下的所有余额投入该产品: ${product.productId}`)
+            }
+        } else {
+            break
+        }
+    }
 
     return processedProducts
 }
@@ -69,8 +83,8 @@ async function getEarnWalletBalance(client: SimpleEarn) {
     return rows;
 }
 
+// 赎回所有活期理财
 async function redeemAllStableCoins(client: SimpleEarn, productIdList: string[]) {
-    // 赎回所有活期理财
     for (const productId of productIdList) {
         await client.restAPI.redeemFlexibleProduct({
             productId,
@@ -202,23 +216,65 @@ function processEarnProductList(earnProductList: {
     return processedRows
 }
 
-// // 申购理财产品
-// // TODO
-// async function subscribeEarnProduct(client: Spot, asset: string, productId: string, amount: Decimal,
-//     spotAvailableBalance: AvailableBalance,
-//     earnAvailableBalance: AvailableBalance,
-//     fundingAvailableBalance: AvailableBalance
-// ) {
-//     let requiredAmount = amount
+// 查询现货账户稳定币余额
+async function getSpotBalance(client: Wallet): Promise<AvailableBalance> {
+    const balanceRequests = STABLE_COINS.map(coin =>
+        client.restAPI.userAsset({
+            asset: coin
+        })
+    );
 
-//     // 计算可用金额
-//     let availableBalance = spotAvailableBalance[asset].plus(fundingAvailableBalance[asset])
-//     // 资金量不足时，兑换后申购
-//     if (availableBalance.lt(requiredAmount)) {
-//         // 兑换
-//         // TODO
-//     }
-//     // 现货账户申购
-//     client.subscribeFlexibleProduct()
-//     let spotSubscribeAmount = requiredAmount.minus(availableBalance)
-// }
+    // 等待所有API请求完成
+    const responses = await Promise.all(balanceRequests);
+
+    // 等待所有响应数据
+    const dataResults = await Promise.all(responses.map(res => res.data()));
+
+    // 创建结果对象
+    const result: AvailableBalance = {};
+
+    // 提取每种稳定币的free值
+    dataResults.forEach((data, index) => {
+        if (data && data.length > 0) {
+            const coin = STABLE_COINS[index];
+            result[coin] = new Decimal(data[0].free || '0');
+        }
+    });
+
+    return result;
+}
+
+// 尽力兑换需要的数量的稳定币
+async function exchangeStableCoin(spotClient: Spot, walletClient: Wallet, asset: string, amount: Decimal) {
+    // 查询当前余额
+    const balance = await getSpotBalance(walletClient)
+    const currentAmount = balance[asset]
+    const needAmount = amount.minus(currentAmount)
+
+    for (const coin of STABLE_COINS) {
+        if (coin === asset) {
+            continue
+        }
+        const coinBalance = balance[coin]
+        // if (coinBalance.gt(new Decimal(0))) {
+        //     // 如果当前这种币的余额足够，直接买到需要的数量
+        //     if (needAmount.lte(coinBalance)) {
+        //         await spotClient.restAPI.newOrder({
+        //             symbol: `${asset}${coin}`,
+        //             side: 'BUY',
+        //             quantity: needAmount.toNumber(),
+        //             type: 'MARKET',
+        //             stopPrice: 0.01, // 有bug要修
+        //         })
+        //     }
+        //     else {
+        //         await spotClient.restAPI.newOrder({
+        //             symbol: `${asset}${coin}`,
+        //             side: 'BUY',
+        //             quoteOrderQty: coinBalance.toNumber(),
+        //         })
+        //     }
+        // }
+
+    }
+}
