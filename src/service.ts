@@ -22,6 +22,8 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     // await redeemAllStableCoins(simpleEarnClient, productIdList)
     // await transferToSpot(walletClient)
 
+    // await convertAllToUSDT(spotClient, walletClient)
+
     // 查询稳定币理财产品列表
     const earnProductList = await getEarnProductList(simpleEarnClient)
 
@@ -244,37 +246,36 @@ async function getSpotBalance(client: Wallet): Promise<AvailableBalance> {
     return result;
 }
 
-// 尽力兑换需要的数量的稳定币
-async function exchangeStableCoin(spotClient: Spot, walletClient: Wallet, asset: string, amount: Decimal) {
-    // 查询当前余额
-    const balance = await getSpotBalance(walletClient)
-    const currentAmount = balance[asset]
-    const needAmount = amount.minus(currentAmount)
+// 将所有稳定币兑换成 USDT
+// 因为只有有限的 symbol，比如只有 USDCUSDT，没有 USDTUSDC
+async function convertAllToUSDT(spotClient: Spot, walletClient: Wallet) {
+    // 获取当前余额
+    const balance = await getSpotBalance(walletClient);
 
-    for (const coin of STABLE_COINS) {
-        if (coin === asset) {
-            continue
-        }
-        const coinBalance = balance[coin]
-        // if (coinBalance.gt(new Decimal(0))) {
-        //     // 如果当前这种币的余额足够，直接买到需要的数量
-        //     if (needAmount.lte(coinBalance)) {
-        //         await spotClient.restAPI.newOrder({
-        //             symbol: `${asset}${coin}`,
-        //             side: 'BUY',
-        //             quantity: needAmount.toNumber(),
-        //             type: 'MARKET',
-        //             stopPrice: 0.01, // 有bug要修
-        //         })
-        //     }
-        //     else {
-        //         await spotClient.restAPI.newOrder({
-        //             symbol: `${asset}${coin}`,
-        //             side: 'BUY',
-        //             quoteOrderQty: coinBalance.toNumber(),
-        //         })
-        //     }
-        // }
+    // 收集所有兑换操作
+    const exchangePromises = STABLE_COINS
+        .filter(coin => coin !== 'USDT') // 过滤掉USDT
+        .map(coin => {
+            const coinBalance = balance[coin];
 
-    }
+            // 如果当前币种有余额，进行兑换
+            // minNotional 要求为 5，所以会剩下小于 5 的余额不处理
+            if (coinBalance && coinBalance.gt(new Decimal(5))) {
+                return spotClient.restAPI.newOrder({
+                    symbol: `${coin}USDT`,
+                    side: 'SELL',
+                    type: 'MARKET',
+                    quantity: Math.floor(coinBalance.toNumber()), // LOT_SIZE 步长为 1，所以要向下取整
+                }).catch(error => {
+                    console.error(`兑换 ${coin} 到 USDT 失败:`, error);
+                    // 返回null，不影响其他转换操作
+                    return null;
+                });
+            }
+            // 如果余额不足，返回resolved promise
+            return Promise.resolve(null);
+        });
+
+    // 并行执行所有兑换操作
+    await Promise.all(exchangePromises);
 }
