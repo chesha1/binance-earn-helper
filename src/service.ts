@@ -17,12 +17,12 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     const walletClient = new Wallet({ configurationRestAPI });
 
     // 转移所有可用稳定币到现货账户中
-    // const earnWalletBalance = await getEarnWalletBalance(simpleEarnClient)
-    // const productIdList = Array.from(new Set(earnWalletBalance.map(item => item.productId).filter(productId => productId !== undefined)));
-    // await redeemAllStableCoins(simpleEarnClient, productIdList)
-    // await transferToSpot(walletClient)
+    const earnWalletBalance = await getEarnWalletBalance(simpleEarnClient)
+    const productIdList = Array.from(new Set(earnWalletBalance.map(item => item.productId).filter(productId => productId !== undefined)));
+    await redeemAllStableCoins(simpleEarnClient, productIdList)
+    await transferToSpot(walletClient)
 
-    // await convertAllToUSDT(spotClient, walletClient)
+    await convertAllToUSDT(spotClient, walletClient)
 
     // 查询稳定币理财产品列表
     const earnProductList = await getEarnProductList(simpleEarnClient)
@@ -32,36 +32,93 @@ export async function handler(API_KEY: string, API_SECRET: string) {
 
     // 依次处理每个理财产品
     for (const product of processedProducts) {
-        const spotBalance = await getSpotBalance(walletClient)
-        // 如果还有现货余额还有大于 0.1 的
-        if (Object.values(spotBalance).some(balance => balance.gt(new Decimal(0.1)))) {
-            // 阶梯产品，只满足需要的量
-            if (product.requiredAmount) {
-                const requiredAmount = product.requiredAmount
-                const asset = product.asset
-                const amount = spotBalance[asset]
-                if (amount && amount.gte(requiredAmount)) {
-                    // 对应的稳定币余额足够，直接申购
-                    await simpleEarnClient.restAPI.subscribeFlexibleProduct({
-                        productId: product.productId,
-                        amount: requiredAmount.toNumber()
+        const availableUSDT = (await getSpotBalance(walletClient)).USDT
+        const asset = product.asset
+        // 如果有 requiredAmount，则买入固定的量
+        if (product.requiredAmount) {
+            // 如果是 USDT，则不买入直接申购
+            if (asset === 'USDT') {
+                await simpleEarnClient.restAPI.subscribeFlexibleProduct({
+                    productId: product.productId,
+                    amount: product.requiredAmount.toNumber(),
+                })
+                await delayMs(3000)
+                continue
+            }
+            // 不是USDT，买入对应量的货币并申购
+            try {
+                await spotClient.restAPI.newOrder({
+                    symbol: `${asset}USDT`,
+                    side: 'BUY',
+                    type: 'MARKET',
+                    quantity: Math.floor(product.requiredAmount.toNumber()),
+                })
+                await simpleEarnClient.restAPI.subscribeFlexibleProduct({
+                    productId: product.productId,
+                    amount: Math.floor(product.requiredAmount.toNumber()),
+                })
+                await delayMs(3000)
+            } catch (error) {
+                // USDT 量不够了，买完申购完结束
+                if (error instanceof Error && error.message.includes('insufficient balance')) {
+                    await spotClient.restAPI.newOrder({
+                        symbol: `${asset}USDT`,
+                        side: 'BUY',
+                        type: 'MARKET',
+                        quoteOrderQty: Math.floor(availableUSDT.toNumber()),
                     })
-                    await delayMs(3100)
-                } else {
-                    console.log(`没有足够余额，尝试兑换`)
-                    break
                 }
+                const availableBalance = (await getSpotBalance(walletClient))[asset]
+                await simpleEarnClient.restAPI.subscribeFlexibleProduct({
+                    productId: product.productId,
+                    amount: availableBalance.toNumber(),
+                })
+                await delayMs(3000)
+                break
             }
-            // 非阶梯产品，把剩下的所有余额投入该产品
-            else {
-                console.log(`没有阶梯，把剩下的所有余额投入该产品: ${product.productId}`)
+        }
+        else {
+            // 没有 requiredAmount，则买入全部的量，申购然后结束
+            // 如果是 USDT，则不买入直接申购
+            if (asset === 'USDT') {
+                await simpleEarnClient.restAPI.subscribeFlexibleProduct({
+                    productId: product.productId,
+                    amount: availableUSDT.toNumber(),
+                })
+                await delayMs(3000)
+                break
             }
-        } else {
+            await spotClient.restAPI.newOrder({
+                symbol: `${asset}USDT`,
+                side: 'BUY',
+                type: 'MARKET',
+                quoteOrderQty: Math.floor(availableUSDT.toNumber()),
+            })
+            const availableBalance = (await getSpotBalance(walletClient))[asset]
+            await simpleEarnClient.restAPI.subscribeFlexibleProduct({
+                productId: product.productId,
+                amount: availableBalance.toNumber(),
+            })
+            await delayMs(3000)
             break
         }
     }
 
-    return processedProducts
+    // 可能还有残留的币，也全部申购
+    const availableBalance = await getSpotBalance(walletClient)
+    for (const asset in availableBalance) {
+        // 金额不可低于0.1
+        if (availableBalance[asset].lt(new Decimal(0.1))) {
+            continue
+        }
+        await simpleEarnClient.restAPI.subscribeFlexibleProduct({
+            productId: `${asset}001`,
+            amount: availableBalance[asset].toNumber(),
+        })
+        await delayMs(3000)
+    }
+
+    return 'success'
 }
 
 // 查询理财账户活期可用余额

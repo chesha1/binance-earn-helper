@@ -24,3 +24,7 @@ graph TD
 	B --- A
 	n4 --- B
 ```
+BTCUSDT
+
+`BUY` side, 用 `quoteOrderQty` USDT 买入，或者买入 `quantity` 个 BTC
+`SELL` side, 卖出得到 `quoteOrderQty` USDT，或者卖出 `quantity` 个 BTC
