@@ -1,4 +1,6 @@
 # binance-earn-helper
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/chesha1/binance-earn-helper)
+
 币安理财助手，自动调整到利率最高的稳定币理财上
 
 不处理定期了，只处理活期，因为定期可能会影响资金灵活性，所以请手动操作
