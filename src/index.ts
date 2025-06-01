@@ -1,5 +1,5 @@
 import { ExecutionContext } from '@cloudflare/workers-types';
-import { handler, handler2 } from './service';
+import { handler } from './service';
 import { Env } from './types';
 
 export default {

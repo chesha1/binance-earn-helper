@@ -7,6 +7,12 @@ import { delayMs } from './utils';
 // 定义支持的稳定币数组
 export const STABLE_COINS = ['USDT', 'USDC', 'FDUSD'];
 
+// 定义常量
+const MIN_SUBSCRIBE_AMOUNT = 0.1; // 申购的最小金额
+const MIN_NOTIONAL_AMOUNT = 5; // newOrder的minNotional要求
+const API_DELAY_MS = 3000; // 服务端请求频率要求延迟
+const DEFAULT_PRODUCT_SUFFIX = '001'; // 默认产品ID后缀
+
 export async function handler(API_KEY: string, API_SECRET: string) {
     const configurationRestAPI = {
         apiKey: API_KEY,
@@ -42,7 +48,7 @@ export async function handler(API_KEY: string, API_SECRET: string) {
                     productId: product.productId,
                     amount: product.requiredAmount.toNumber(),
                 })
-                await delayMs(3000)
+                await delayMs(API_DELAY_MS)
                 continue
             }
             // 不是USDT，买入对应量的货币并申购
@@ -57,7 +63,7 @@ export async function handler(API_KEY: string, API_SECRET: string) {
                     productId: product.productId,
                     amount: Math.floor(product.requiredAmount.toNumber()),
                 })
-                await delayMs(3000)
+                await delayMs(API_DELAY_MS)
             } catch (error) {
                 // USDT 量不够了，买完申购完结束
                 if (error instanceof Error && error.message.includes('insufficient balance')) {
@@ -73,7 +79,7 @@ export async function handler(API_KEY: string, API_SECRET: string) {
                     productId: product.productId,
                     amount: availableBalance.toNumber(),
                 })
-                await delayMs(3000)
+                await delayMs(API_DELAY_MS)
                 break
             }
         }
@@ -85,7 +91,7 @@ export async function handler(API_KEY: string, API_SECRET: string) {
                     productId: product.productId,
                     amount: availableUSDT.toNumber(),
                 })
-                await delayMs(3000)
+                await delayMs(API_DELAY_MS)
                 break
             }
             await spotClient.restAPI.newOrder({
@@ -99,7 +105,7 @@ export async function handler(API_KEY: string, API_SECRET: string) {
                 productId: product.productId,
                 amount: availableBalance.toNumber(),
             })
-            await delayMs(3000)
+            await delayMs(API_DELAY_MS)
             break
         }
     }
@@ -107,15 +113,15 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     // 可能还有残留的币，也全部申购
     const availableBalance = await getSpotBalance(walletClient)
     for (const asset in availableBalance) {
-        // 金额不可低于0.1
-        if (availableBalance[asset].lt(new Decimal(0.1))) {
+        // 金额不可低于最小申购金额
+        if (availableBalance[asset].lt(new Decimal(MIN_SUBSCRIBE_AMOUNT))) {
             continue
         }
         await simpleEarnClient.restAPI.subscribeFlexibleProduct({
-            productId: `${asset}001`,
+            productId: `${asset}${DEFAULT_PRODUCT_SUFFIX}`,
             amount: availableBalance[asset].toNumber(),
         })
-        await delayMs(3000)
+        await delayMs(API_DELAY_MS)
     }
 
     return 'success'
@@ -150,7 +156,7 @@ async function redeemAllStableCoins(client: SimpleEarn, productIdList: string[])
             redeemAll: true,
         })
         // 文档上说每个账户最多三秒一次
-        await delayMs(3100)
+        await delayMs(API_DELAY_MS)
     }
 }
 
@@ -316,8 +322,8 @@ async function convertAllToUSDT(spotClient: Spot, walletClient: Wallet) {
             const coinBalance = balance[coin];
 
             // 如果当前币种有余额，进行兑换
-            // minNotional 要求为 5，所以会剩下小于 5 的余额不处理
-            if (coinBalance && coinBalance.gt(new Decimal(5))) {
+            // minNotional 要求为 MIN_NOTIONAL_AMOUNT，所以会剩下小于该值的余额不处理
+            if (coinBalance && coinBalance.gt(new Decimal(MIN_NOTIONAL_AMOUNT))) {
                 return spotClient.restAPI.newOrder({
                     symbol: `${coin}USDT`,
                     side: 'SELL',
