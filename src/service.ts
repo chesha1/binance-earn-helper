@@ -2,7 +2,7 @@ import { Spot } from '@binance/spot';
 import { SimpleEarn, SimpleEarnRestAPI } from '@binance/simple-earn';
 import { Wallet } from '@binance/wallet';
 import { Decimal } from 'decimal.js';
-import { ProcessedEarnProduct, AvailableBalance } from './types';
+import { ProcessedEarnProduct, AvailableBalance, Clients } from './types';
 import { delayMs } from './utils';
 // 定义支持的稳定币数组
 export const STABLE_COINS = ['USDT', 'USDC', 'FDUSD'];
@@ -13,118 +13,191 @@ const MIN_NOTIONAL_AMOUNT = 5; // newOrder的minNotional要求
 const API_DELAY_MS = 3000; // 服务端请求频率要求延迟
 const DEFAULT_PRODUCT_SUFFIX = '001'; // 默认产品ID后缀
 
+// 主处理函数
 export async function handler(API_KEY: string, API_SECRET: string) {
+    // 初始化客户端
+    const clients = initializeClients(API_KEY, API_SECRET);
+
+    // 准备余额
+    await prepareBalance(clients);
+
+    // 获取并处理理财产品列表
+    const processedProducts = await getProcessedEarnProducts(clients.simpleEarnClient);
+
+    // 申购理财产品
+    await subscribeToProducts(processedProducts, clients);
+
+    // 为现货账户中残留的币申购理财产品
+    await subscribeRemainingBalances(clients.simpleEarnClient, clients.walletClient);
+
+    return 'success';
+}
+
+// 初始化所有客户端
+function initializeClients(API_KEY: string, API_SECRET: string): Clients {
     const configurationRestAPI = {
         apiKey: API_KEY,
         apiSecret: API_SECRET,
     };
-    const spotClient = new Spot({ configurationRestAPI });
-    const simpleEarnClient = new SimpleEarn({ configurationRestAPI });
-    const walletClient = new Wallet({ configurationRestAPI });
+
+    return {
+        spotClient: new Spot({ configurationRestAPI }),
+        simpleEarnClient: new SimpleEarn({ configurationRestAPI }),
+        walletClient: new Wallet({ configurationRestAPI }),
+    };
+}
+
+// 准备余额：赎回所有理财产品，转移到现货账户，并兑换为USDT
+async function prepareBalance(clients: Clients) {
+    const { simpleEarnClient, walletClient, spotClient } = clients;
 
     // 转移所有可用稳定币到现货账户中
-    const earnWalletBalance = await getEarnWalletBalance(simpleEarnClient)
+    const earnWalletBalance = await getEarnWalletBalance(simpleEarnClient);
     const productIdList = Array.from(new Set(earnWalletBalance.map(item => item.productId).filter(productId => productId !== undefined)));
-    await redeemAllStableCoins(simpleEarnClient, productIdList)
-    await transferToSpot(walletClient)
 
-    await convertAllToUSDT(spotClient, walletClient)
+    await redeemAllStableCoins(simpleEarnClient, productIdList);
+    await transferToSpot(walletClient);
+    await convertAllToUSDT(spotClient, walletClient);
+}
 
-    // 查询稳定币理财产品列表
-    const earnProductList = await getEarnProductList(simpleEarnClient)
+// 获取并处理理财产品列表
+async function getProcessedEarnProducts(simpleEarnClient: SimpleEarn): Promise<ProcessedEarnProduct[]> {
+    const earnProductList = await getEarnProductList(simpleEarnClient);
+    return processEarnProductList(earnProductList);
+}
 
-    // 处理 earnProductList 并按收益率排序
-    const processedProducts = processEarnProductList(earnProductList)
+// 申购单个理财产品
+async function subscribeToProduct(
+    product: ProcessedEarnProduct,
+    availableUSDT: Decimal,
+    clients: Clients
+): Promise<boolean> {
+    // 如果有 requiredAmount，则买入固定的量
+    if (product.requiredAmount) {
+        return await handleRequiredAmountProduct(product, availableUSDT, clients);
+    } else {
+        // 没有 requiredAmount，则买入全部的量，申购然后结束
+        return await handleUnlimitedProduct(product, availableUSDT, clients);
+    }
+}
 
-    // 依次处理每个理财产品
-    for (const product of processedProducts) {
-        const availableUSDT = (await getSpotBalance(walletClient)).USDT
-        const asset = product.asset
-        // 如果有 requiredAmount，则买入固定的量
-        if (product.requiredAmount) {
-            // 如果是 USDT，则不买入直接申购
-            if (asset === 'USDT') {
-                await simpleEarnClient.restAPI.subscribeFlexibleProduct({
-                    productId: product.productId,
-                    amount: product.requiredAmount.toNumber(),
-                })
-                await delayMs(API_DELAY_MS)
-                continue
-            }
-            // 不是USDT，买入对应量的货币并申购
-            try {
-                await spotClient.restAPI.newOrder({
-                    symbol: `${asset}USDT`,
-                    side: 'BUY',
-                    type: 'MARKET',
-                    quantity: Math.floor(product.requiredAmount.toNumber()),
-                })
-                await simpleEarnClient.restAPI.subscribeFlexibleProduct({
-                    productId: product.productId,
-                    amount: Math.floor(product.requiredAmount.toNumber()),
-                })
-                await delayMs(API_DELAY_MS)
-            } catch (error) {
-                // USDT 量不够了，买完申购完结束
-                if (error instanceof Error && error.message.includes('insufficient balance')) {
-                    await spotClient.restAPI.newOrder({
-                        symbol: `${asset}USDT`,
-                        side: 'BUY',
-                        type: 'MARKET',
-                        quoteOrderQty: Math.floor(availableUSDT.toNumber()),
-                    })
-                }
-                const availableBalance = (await getSpotBalance(walletClient))[asset]
-                await simpleEarnClient.restAPI.subscribeFlexibleProduct({
-                    productId: product.productId,
-                    amount: availableBalance.toNumber(),
-                })
-                await delayMs(API_DELAY_MS)
-                break
-            }
-        }
-        else {
-            // 没有 requiredAmount，则买入全部的量，申购然后结束
-            // 如果是 USDT，则不买入直接申购
-            if (asset === 'USDT') {
-                await simpleEarnClient.restAPI.subscribeFlexibleProduct({
-                    productId: product.productId,
-                    amount: availableUSDT.toNumber(),
-                })
-                await delayMs(API_DELAY_MS)
-                break
-            }
+// 处理有固定申购金额的产品
+async function handleRequiredAmountProduct(
+    product: ProcessedEarnProduct,
+    availableUSDT: Decimal,
+    clients: Clients
+): Promise<boolean> {
+    const { spotClient, simpleEarnClient, walletClient } = clients;
+    const asset = product.asset;
+    const requiredAmount = product.requiredAmount!;
+
+    // 如果是 USDT，则不买入直接申购
+    if (asset === 'USDT') {
+        await simpleEarnClient.restAPI.subscribeFlexibleProduct({
+            productId: product.productId,
+            amount: requiredAmount.toNumber(),
+        });
+        await delayMs(API_DELAY_MS);
+        return false; // 继续处理下一个产品
+    }
+
+    // 不是USDT，买入对应量的货币并申购
+    try {
+        await spotClient.restAPI.newOrder({
+            symbol: `${asset}USDT`,
+            side: 'BUY',
+            type: 'MARKET',
+            quantity: Math.floor(requiredAmount.toNumber()),
+        });
+        await simpleEarnClient.restAPI.subscribeFlexibleProduct({
+            productId: product.productId,
+            amount: Math.floor(requiredAmount.toNumber()),
+        });
+        await delayMs(API_DELAY_MS);
+        return false; // 继续处理下一个产品
+    } catch (error) {
+        // USDT 量不够了，买完申购完结束
+        if (error instanceof Error && error.message.includes('insufficient balance')) {
             await spotClient.restAPI.newOrder({
                 symbol: `${asset}USDT`,
                 side: 'BUY',
                 type: 'MARKET',
                 quoteOrderQty: Math.floor(availableUSDT.toNumber()),
-            })
-            const availableBalance = (await getSpotBalance(walletClient))[asset]
-            await simpleEarnClient.restAPI.subscribeFlexibleProduct({
-                productId: product.productId,
-                amount: availableBalance.toNumber(),
-            })
-            await delayMs(API_DELAY_MS)
-            break
+            });
         }
+        const availableBalance = (await getSpotBalance(walletClient))[asset];
+        await simpleEarnClient.restAPI.subscribeFlexibleProduct({
+            productId: product.productId,
+            amount: availableBalance.toNumber(),
+        });
+        await delayMs(API_DELAY_MS);
+        return true; // 中断循环
+    }
+}
+
+// 处理无限制申购金额的产品
+async function handleUnlimitedProduct(
+    product: ProcessedEarnProduct,
+    availableUSDT: Decimal,
+    clients: Clients
+): Promise<boolean> {
+    const { spotClient, simpleEarnClient, walletClient } = clients;
+    const asset = product.asset;
+
+    // 如果是 USDT，则不买入直接申购
+    if (asset === 'USDT') {
+        await simpleEarnClient.restAPI.subscribeFlexibleProduct({
+            productId: product.productId,
+            amount: availableUSDT.toNumber(),
+        });
+        await delayMs(API_DELAY_MS);
+        return true; // 中断循环
     }
 
-    // 可能还有残留的币，也全部申购
-    const availableBalance = await getSpotBalance(walletClient)
+    await spotClient.restAPI.newOrder({
+        symbol: `${asset}USDT`,
+        side: 'BUY',
+        type: 'MARKET',
+        quoteOrderQty: Math.floor(availableUSDT.toNumber()),
+    });
+    const availableBalance = (await getSpotBalance(walletClient))[asset];
+    await simpleEarnClient.restAPI.subscribeFlexibleProduct({
+        productId: product.productId,
+        amount: availableBalance.toNumber(),
+    });
+    await delayMs(API_DELAY_MS);
+    return true; // 中断循环
+}
+
+// 申购所有理财产品
+async function subscribeToProducts(processedProducts: ProcessedEarnProduct[], clients: Clients) {
+    const { walletClient } = clients;
+
+    for (const product of processedProducts) {
+        const availableUSDT = (await getSpotBalance(walletClient)).USDT;
+        const shouldBreak = await subscribeToProduct(product, availableUSDT, clients);
+
+        if (shouldBreak) {
+            break;
+        }
+    }
+}
+
+// 申购残留的币种
+async function subscribeRemainingBalances(simpleEarnClient: SimpleEarn, walletClient: Wallet) {
+    const availableBalance = await getSpotBalance(walletClient);
+
     for (const asset in availableBalance) {
         // 金额不可低于最小申购金额
         if (availableBalance[asset].lt(new Decimal(MIN_SUBSCRIBE_AMOUNT))) {
-            continue
+            continue;
         }
         await simpleEarnClient.restAPI.subscribeFlexibleProduct({
             productId: `${asset}${DEFAULT_PRODUCT_SUFFIX}`,
             amount: availableBalance[asset].toNumber(),
-        })
-        await delayMs(API_DELAY_MS)
+        });
+        await delayMs(API_DELAY_MS);
     }
-
-    return 'success'
 }
 
 // 查询理财账户活期可用余额
