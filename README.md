@@ -7,22 +7,29 @@
 
 ```mermaid
 graph TD
-    A["利率从高到低满足理财产品"]
-    B["申购该产品"]
-    n1["全部兑换成USDT"]
-    n2{"现货账户中还有可用USDT"}
-    n3["结束"]
-    n4{是否已经完全购买该产品}
-    n5["扫描所有理财产品"]
-    Z["调整（赎回）全部可用余额到现货账户"]
-    A --- n2
-    n2 ---|"否"| n3
-    n2 ---|"是"| n4
-	n5 --- A
-	Z --- n1
-	n1 --- n5
-	B --- A
-	n4 --- B
+    productRanking["利率从高到低满足理财产品"]
+    subscribeProduct["申购理财"]
+    convertAllToUSDT["全部兑换成USDT"]
+    isProductUSDT{"理财产品是否是USDT"}
+    purchaseAttempt{"尝试购买对应币"}
+    scanAllProducts["扫描所有理财产品"]
+    redeemToSpot["调整（赎回）全部可用余额到现货账户"]
+    directSubscribe["直接申购"]
+    endProcess["用剩下的USDT余额买，流程结束"]
+    remainingBalanceSubscribe["现货账户中剩余的余额申购理财"]
+
+    productRanking --- isProductUSDT
+    isProductUSDT ---|否| purchaseAttempt
+    scanAllProducts --- productRanking
+    redeemToSpot --- convertAllToUSDT
+    convertAllToUSDT --- scanAllProducts
+    subscribeProduct --- productRanking
+    purchaseAttempt ---|余额充足，够买成功| subscribeProduct
+    isProductUSDT ---|是| directSubscribe
+    directSubscribe --- productRanking
+    purchaseAttempt ---|余额不足| endProcess
+    endProcess --- remainingBalanceSubscribe
+
 ```
 BTCUSDT
 

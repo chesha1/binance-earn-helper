@@ -15,22 +15,40 @@ const DEFAULT_PRODUCT_SUFFIX = '001'; // 默认产品ID后缀
 
 // 主处理函数
 export async function handler(API_KEY: string, API_SECRET: string) {
-    // 初始化客户端
-    const clients = initializeClients(API_KEY, API_SECRET);
+    console.log({ action: 'handler_start', timestamp: new Date().toISOString() });
 
-    // 准备余额
-    await prepareBalance(clients);
+    try {
+        // 初始化客户端
+        console.log({ action: 'initializing_clients' });
+        const clients = initializeClients(API_KEY, API_SECRET);
+        console.log({ action: 'clients_initialized' });
 
-    // 获取并处理理财产品列表
-    const processedProducts = await getProcessedEarnProducts(clients.simpleEarnClient);
+        // 准备余额
+        console.log({ action: 'preparing_balance_start' });
+        await prepareBalance(clients);
+        console.log({ action: 'preparing_balance_completed' });
 
-    // 申购理财产品
-    await subscribeToProducts(processedProducts, clients);
+        // 获取并处理理财产品列表
+        console.log({ action: 'getting_earn_products_start' });
+        const processedProducts = await getProcessedEarnProducts(clients.simpleEarnClient);
+        console.log({ action: 'earn_products_processed', products_count: processedProducts.length });
 
-    // 为现货账户中残留的币申购理财产品
-    await subscribeRemainingBalances(clients.simpleEarnClient, clients.walletClient);
+        // 申购理财产品
+        console.log({ action: 'subscribing_to_products_start' });
+        await subscribeToProducts(processedProducts, clients);
+        console.log({ action: 'subscribing_to_products_completed' });
 
-    return 'success';
+        // 为现货账户中残留的币申购理财产品
+        console.log({ action: 'subscribing_remaining_balances_start' });
+        await subscribeRemainingBalances(clients.simpleEarnClient, clients.walletClient);
+        console.log({ action: 'subscribing_remaining_balances_completed' });
+
+        console.log({ action: 'handler_completed_successfully', timestamp: new Date().toISOString() });
+        return 'success';
+    } catch (error) {
+        console.log({ action: 'handler_failed', error: error instanceof Error ? error.message : String(error), timestamp: new Date().toISOString() });
+        throw error;
+    }
 }
 
 // 初始化所有客户端
@@ -54,16 +72,31 @@ async function prepareBalance(clients: Clients) {
     // 转移所有可用稳定币到现货账户中
     const earnWalletBalance = await getEarnWalletBalance(simpleEarnClient);
     const productIdList = Array.from(new Set(earnWalletBalance.map(item => item.productId).filter(productId => productId !== undefined)));
+    console.log({ action: 'earn_wallet_balance_retrieved', balance_items: earnWalletBalance.length });
 
+    console.log({ action: 'redeeming_all_stable_coins_start' });
     await redeemAllStableCoins(simpleEarnClient, productIdList);
+    console.log({ action: 'redeeming_all_stable_coins_completed' });
+
+    console.log({ action: 'transferring_from_funding_to_spot_start' });
     await transferToSpot(walletClient);
+    console.log({ action: 'transferring_from_funding_to_spot_completed' });
+
+    console.log({ action: 'converting_all_to_usdt_start' });
     await convertAllToUSDT(spotClient, walletClient);
+    console.log({ action: 'converting_all_to_usdt_completed' });
 }
 
 // 获取并处理理财产品列表
 async function getProcessedEarnProducts(simpleEarnClient: SimpleEarn): Promise<ProcessedEarnProduct[]> {
     const earnProductList = await getEarnProductList(simpleEarnClient);
-    return processEarnProductList(earnProductList);
+    console.log({ action: 'earn_product_list_retrieved', total_products: earnProductList.total });
+
+    console.log({ action: 'processing_earn_product_list' });
+    const processedProducts = processEarnProductList(earnProductList);
+    console.log({ action: 'earn_product_list_processed', processed_count: processedProducts.length });
+
+    return processedProducts;
 }
 
 // 申购单个理财产品
@@ -72,12 +105,25 @@ async function subscribeToProduct(
     availableUSDT: Decimal,
     clients: Clients
 ): Promise<boolean> {
+    console.log({
+        action: 'subscribing_to_product_start',
+        product_id: product.productId,
+        asset: product.asset,
+        available_usdt: availableUSDT.toNumber(),
+        has_required_amount: !!product.requiredAmount,
+        required_amount: product.requiredAmount?.toNumber()
+    });
+
     // 如果有 requiredAmount，则买入固定的量
     if (product.requiredAmount) {
-        return await handleRequiredAmountProduct(product, availableUSDT, clients);
+        const result = await handleRequiredAmountProduct(product, availableUSDT, clients);
+        console.log({ action: 'required_amount_product_handled', product_id: product.productId, should_break: result });
+        return result;
     } else {
         // 没有 requiredAmount，则买入全部的量，申购然后结束
-        return await handleUnlimitedProduct(product, availableUSDT, clients);
+        const result = await handleUnlimitedProduct(product, availableUSDT, clients);
+        console.log({ action: 'unlimited_product_handled', product_id: product.productId, should_break: result });
+        return result;
     }
 }
 
@@ -93,43 +139,55 @@ async function handleRequiredAmountProduct(
 
     // 如果是 USDT，则不买入直接申购
     if (asset === 'USDT') {
+        console.log({ action: 'subscribing_usdt_product', product_id: product.productId, amount: requiredAmount.toNumber() });
         await simpleEarnClient.restAPI.subscribeFlexibleProduct({
             productId: product.productId,
             amount: requiredAmount.toNumber(),
         });
+        console.log({ action: 'usdt_product_subscribed_successfully', product_id: product.productId });
         await delayMs(API_DELAY_MS);
         return false; // 继续处理下一个产品
     }
 
     // 不是USDT，买入对应量的货币并申购
     try {
+        console.log({ action: 'buying_asset_for_required_amount', asset, symbol: `${asset}USDT`, quantity: Math.floor(requiredAmount.toNumber()) });
         await spotClient.restAPI.newOrder({
             symbol: `${asset}USDT`,
             side: 'BUY',
             type: 'MARKET',
             quantity: Math.floor(requiredAmount.toNumber()),
         });
+        console.log({ action: 'asset_bought_successfully', asset, quantity: Math.floor(requiredAmount.toNumber()) });
+
+        console.log({ action: 'subscribing_required_amount_product', product_id: product.productId, amount: Math.floor(requiredAmount.toNumber()) });
         await simpleEarnClient.restAPI.subscribeFlexibleProduct({
             productId: product.productId,
             amount: Math.floor(requiredAmount.toNumber()),
         });
+        console.log({ action: 'required_amount_product_subscribed_successfully', product_id: product.productId });
         await delayMs(API_DELAY_MS);
         return false; // 继续处理下一个产品
     } catch (error) {
+        console.log({ action: 'buying_asset_failed', asset, error: error instanceof Error ? error.message : String(error) });
         // USDT 量不够了，买完申购完结束
         if (error instanceof Error && error.message.includes('insufficient balance')) {
+            console.log({ action: 'insufficient_balance_buying_with_remaining_usdt', asset, remaining_usdt: Math.floor(availableUSDT.toNumber()) });
             await spotClient.restAPI.newOrder({
                 symbol: `${asset}USDT`,
                 side: 'BUY',
                 type: 'MARKET',
                 quoteOrderQty: Math.floor(availableUSDT.toNumber()),
             });
+            console.log({ action: 'remaining_usdt_used_to_buy_asset', asset });
         }
         const availableBalance = (await getSpotBalance(walletClient))[asset];
+        console.log({ action: 'subscribing_with_available_balance', product_id: product.productId, available_balance: availableBalance.toNumber() });
         await simpleEarnClient.restAPI.subscribeFlexibleProduct({
             productId: product.productId,
             amount: availableBalance.toNumber(),
         });
+        console.log({ action: 'product_subscribed_with_available_balance', product_id: product.productId });
         await delayMs(API_DELAY_MS);
         return true; // 中断循环
     }
@@ -146,25 +204,32 @@ async function handleUnlimitedProduct(
 
     // 如果是 USDT，则不买入直接申购
     if (asset === 'USDT') {
+        console.log({ action: 'subscribing_unlimited_usdt_product', product_id: product.productId, amount: availableUSDT.toNumber() });
         await simpleEarnClient.restAPI.subscribeFlexibleProduct({
             productId: product.productId,
             amount: availableUSDT.toNumber(),
         });
+        console.log({ action: 'unlimited_usdt_product_subscribed_successfully', product_id: product.productId });
         await delayMs(API_DELAY_MS);
         return true; // 中断循环
     }
 
+    console.log({ action: 'buying_asset_with_all_usdt', asset, symbol: `${asset}USDT`, quote_order_qty: Math.floor(availableUSDT.toNumber()) });
     await spotClient.restAPI.newOrder({
         symbol: `${asset}USDT`,
         side: 'BUY',
         type: 'MARKET',
         quoteOrderQty: Math.floor(availableUSDT.toNumber()),
     });
+    console.log({ action: 'asset_bought_with_all_usdt_successfully', asset });
+
     const availableBalance = (await getSpotBalance(walletClient))[asset];
+    console.log({ action: 'subscribing_unlimited_product', product_id: product.productId, available_balance: availableBalance.toNumber() });
     await simpleEarnClient.restAPI.subscribeFlexibleProduct({
         productId: product.productId,
         amount: availableBalance.toNumber(),
     });
+    console.log({ action: 'unlimited_product_subscribed_successfully', product_id: product.productId });
     await delayMs(API_DELAY_MS);
     return true; // 中断循环
 }
@@ -173,11 +238,17 @@ async function handleUnlimitedProduct(
 async function subscribeToProducts(processedProducts: ProcessedEarnProduct[], clients: Clients) {
     const { walletClient } = clients;
 
-    for (const product of processedProducts) {
+    for (let i = 0; i < processedProducts.length; i++) {
+        const product = processedProducts[i];
+        console.log({ action: 'processing_product', index: i + 1, product_id: product.productId, asset: product.asset });
+
         const availableUSDT = (await getSpotBalance(walletClient)).USDT;
+        console.log({ action: 'checking_available_usdt', available_usdt: availableUSDT.toNumber() });
+
         const shouldBreak = await subscribeToProduct(product, availableUSDT, clients);
 
         if (shouldBreak) {
+            console.log({ action: 'subscription_loop_terminated', reason: 'insufficient_funds' });
             break;
         }
     }
@@ -185,7 +256,9 @@ async function subscribeToProducts(processedProducts: ProcessedEarnProduct[], cl
 
 // 申购残留的币种
 async function subscribeRemainingBalances(simpleEarnClient: SimpleEarn, walletClient: Wallet) {
+    console.log({ action: 'subscribing_remaining_balances_start' });
     const availableBalance = await getSpotBalance(walletClient);
+    console.log({ action: 'remaining_balances_retrieved', balances: Object.fromEntries(Object.entries(availableBalance).map(([k, v]) => [k, v.toNumber()])) });
 
     for (const asset in availableBalance) {
         // 金额不可低于最小申购金额
@@ -196,8 +269,11 @@ async function subscribeRemainingBalances(simpleEarnClient: SimpleEarn, walletCl
             productId: `${asset}${DEFAULT_PRODUCT_SUFFIX}`,
             amount: availableBalance[asset].toNumber(),
         });
+        console.log({ action: 'remaining_asset_subscribed_successfully', product_id: `${asset}${DEFAULT_PRODUCT_SUFFIX}`, amount: availableBalance[asset].toNumber() });
         await delayMs(API_DELAY_MS);
     }
+
+    console.log({ action: 'remaining_balances_subscription_completed' });
 }
 
 // 查询理财账户活期可用余额
@@ -231,9 +307,13 @@ async function redeemAllStableCoins(client: SimpleEarn, productIdList: string[])
         // 文档上说每个账户最多三秒一次
         await delayMs(API_DELAY_MS)
     }
+
+    console.log({ action: 'redeeming_stable_coins_completed' });
 }
 
 async function transferToSpot(walletClient: Wallet) {
+    console.log({ action: 'transferring_from_funding_to_spot_account_start', stable_coins: STABLE_COINS });
+
     // 并行查询所有稳定币的资金账户余额
     const walletResponses = await Promise.all(
         STABLE_COINS.map(coin =>
@@ -249,12 +329,16 @@ async function transferToSpot(walletClient: Wallet) {
     // 创建并行转账请求
     const transferPromises = allBalances
         .map((balances, index) => {
+            const coin = STABLE_COINS[index];
             if (balances && balances.length > 0 && Number(balances[0].free) > 0) {
+                console.log({ action: 'transferring_asset_from_funding_to_spot', asset: coin, amount: Number(balances[0].free) });
                 return walletClient.restAPI.userUniversalTransfer({
                     type: 'FUNDING_MAIN',
-                    asset: STABLE_COINS[index],
+                    asset: coin,
                     amount: Number(balances[0].free),
                 });
+            } else {
+                console.log({ action: 'skipping_transfer_no_funding_balance', asset: coin });
             }
             return null;
         })
@@ -262,7 +346,11 @@ async function transferToSpot(walletClient: Wallet) {
 
     // 并行执行所有转账请求
     if (transferPromises.length > 0) {
+        console.log({ action: 'executing_funding_to_spot_transfers', transfer_count: transferPromises.length });
         await Promise.all(transferPromises);
+        console.log({ action: 'funding_to_spot_transfers_completed_successfully' });
+    } else {
+        console.log({ action: 'no_funding_to_spot_transfers_needed' });
     }
 }
 
@@ -385,33 +473,44 @@ async function getSpotBalance(client: Wallet): Promise<AvailableBalance> {
 // 将所有稳定币兑换成 USDT
 // 因为只有有限的 symbol，比如只有 USDCUSDT，没有 USDTUSDC
 async function convertAllToUSDT(spotClient: Spot, walletClient: Wallet) {
+    console.log({ action: 'converting_to_usdt_start' });
+
     // 获取当前余额
     const balance = await getSpotBalance(walletClient);
+    console.log({ action: 'current_spot_balance_retrieved', balances: Object.fromEntries(Object.entries(balance).map(([k, v]) => [k, v.toNumber()])) });
 
     // 收集所有兑换操作
     const exchangePromises = STABLE_COINS
         .filter(coin => coin !== 'USDT') // 过滤掉USDT
-        .map(coin => {
+        .map(async coin => {
             const coinBalance = balance[coin];
 
             // 如果当前币种有余额，进行兑换
             // minNotional 要求为 MIN_NOTIONAL_AMOUNT，所以会剩下小于该值的余额不处理
             if (coinBalance && coinBalance.gt(new Decimal(MIN_NOTIONAL_AMOUNT))) {
-                return spotClient.restAPI.newOrder({
-                    symbol: `${coin}USDT`,
-                    side: 'SELL',
-                    type: 'MARKET',
-                    quantity: Math.floor(coinBalance.toNumber()), // LOT_SIZE 步长为 1，所以要向下取整
-                }).catch(error => {
-                    console.error(`兑换 ${coin} 到 USDT 失败:`, error);
+                console.log({ action: 'converting_asset_to_usdt', asset: coin, symbol: `${coin}USDT`, quantity: Math.floor(coinBalance.toNumber()) });
+                try {
+                    await spotClient.restAPI.newOrder({
+                        symbol: `${coin}USDT`,
+                        side: 'SELL',
+                        type: 'MARKET',
+                        quantity: Math.floor(coinBalance.toNumber()), // LOT_SIZE 步长为 1，所以要向下取整
+                    });
+                    console.log({ action: 'asset_converted_to_usdt_successfully', asset: coin });
+                } catch (error) {
+                    console.log({ action: 'asset_conversion_failed', asset: coin, error: error instanceof Error ? error.message : String(error) });
                     // 返回null，不影响其他转换操作
                     return null;
-                });
+                }
+            } else {
+                console.log({ action: 'skipping_conversion_insufficient_balance', asset: coin, balance: coinBalance?.toNumber() || 0, min_required: MIN_NOTIONAL_AMOUNT });
             }
             // 如果余额不足，返回resolved promise
-            return Promise.resolve(null);
+            return null;
         });
 
     // 并行执行所有兑换操作
+    console.log({ action: 'executing_conversions', conversion_count: exchangePromises.length });
     await Promise.all(exchangePromises);
+    console.log({ action: 'conversions_completed' });
 }
