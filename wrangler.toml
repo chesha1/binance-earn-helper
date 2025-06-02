@@ -3,8 +3,8 @@ main = "./src/index-cf.ts"
 compatibility_date = "2025-03-15"
 compatibility_flags = ["nodejs_compat_v2"]
 
-[triggers]
-crons = ["5 21 * * *"]
+# [triggers]
+# crons = ["5 21 * * *"]
 
 [observability]
 enabled = true
