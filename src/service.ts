@@ -17,6 +17,9 @@ const DEFAULT_PRODUCT_SUFFIX = '001'; // 默认产品ID后缀
 export async function handler(API_KEY: string, API_SECRET: string) {
     console.log({ message: 'handler_start', timestamp: new Date().toISOString() });
 
+    // 打印执行位置信息
+    await printExecutionLocation();
+
     try {
         // 初始化客户端
         console.log({ message: 'initializing_clients' });
@@ -48,6 +51,41 @@ export async function handler(API_KEY: string, API_SECRET: string) {
     } catch (error) {
         console.log({ message: 'handler_failed', error: error instanceof Error ? error.message : String(error), timestamp: new Date().toISOString() });
         throw error;
+    }
+}
+
+// 获取并打印执行位置信息
+async function printExecutionLocation() {
+    try {
+        console.log({ message: 'getting_execution_location' });
+
+        // 尝试获取IP地理位置信息
+        try {
+            const response = await fetch('https://ipwhois.app/json/');
+            const locationData = await response.json();
+
+            if (locationData.success) {
+                console.log({
+                    message: 'execution_physical_location',
+                    ip: locationData.ip,
+                    country: locationData.country,
+                    city: locationData.city
+                });
+            } else {
+                console.log({ message: 'location_api_failed', error: 'API返回失败状态' });
+            }
+        } catch (error) {
+            console.log({
+                message: 'location_fetch_failed',
+                error: error instanceof Error ? error.message : String(error)
+            });
+        }
+
+    } catch (error) {
+        console.log({
+            message: 'print_execution_location_failed',
+            error: error instanceof Error ? error.message : String(error)
+        });
     }
 }
 
