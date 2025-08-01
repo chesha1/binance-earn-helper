@@ -5,7 +5,7 @@ import { Decimal } from 'decimal.js';
 import { ProcessedEarnProduct, AvailableBalance, Clients } from './types';
 import { delayMs } from './utils';
 // 定义支持的稳定币数组
-export const STABLE_COINS = ['USDT', 'USDC', 'FDUSD'];
+export const STABLE_COINS = ['USDT', 'USDC', 'FDUSD', 'XUSD', 'DAI'];
 
 // 定义常量
 const MIN_SUBSCRIBE_AMOUNT = 0.1; // 申购的最小金额
