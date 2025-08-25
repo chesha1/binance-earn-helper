@@ -1,4 +1,4 @@
-import { Spot } from '@binance/spot';
+import { Spot, SpotRestAPI } from '@binance/spot';
 import { SimpleEarn, SimpleEarnRestAPI } from '@binance/simple-earn';
 import { Wallet } from '@binance/wallet';
 import { Decimal } from 'decimal.js';
@@ -192,8 +192,8 @@ async function handleRequiredAmountProduct(
         console.log({ message: 'buying_asset_for_required_amount', asset, symbol: `${asset}USDT`, quantity: Math.floor(requiredAmount.toNumber()) });
         await spotClient.restAPI.newOrder({
             symbol: `${asset}USDT`,
-            side: 'BUY',
-            type: 'MARKET',
+            side: SpotRestAPI.NewOrderSideEnum.BUY,
+            type: SpotRestAPI.NewOrderTypeEnum.MARKET,
             quantity: Math.floor(requiredAmount.toNumber()),
         });
         console.log({ message: 'asset_bought_successfully', asset, quantity: Math.floor(requiredAmount.toNumber()) });
@@ -213,8 +213,8 @@ async function handleRequiredAmountProduct(
             console.log({ message: 'insufficient_balance_buying_with_remaining_usdt', asset, remaining_usdt: Math.floor(availableUSDT.toNumber()) });
             await spotClient.restAPI.newOrder({
                 symbol: `${asset}USDT`,
-                side: 'BUY',
-                type: 'MARKET',
+                side: SpotRestAPI.NewOrderSideEnum.BUY,
+                type: SpotRestAPI.NewOrderTypeEnum.MARKET,
                 quoteOrderQty: Math.floor(availableUSDT.toNumber()),
             });
             console.log({ message: 'remaining_usdt_used_to_buy_asset', asset });
@@ -255,8 +255,8 @@ async function handleUnlimitedProduct(
     console.log({ message: 'buying_asset_with_all_usdt', asset, symbol: `${asset}USDT`, quote_order_qty: Math.floor(availableUSDT.toNumber()) });
     await spotClient.restAPI.newOrder({
         symbol: `${asset}USDT`,
-        side: 'BUY',
-        type: 'MARKET',
+        side: SpotRestAPI.NewOrderSideEnum.BUY,
+        type: SpotRestAPI.NewOrderTypeEnum.MARKET,
         quoteOrderQty: Math.floor(availableUSDT.toNumber()),
     });
     console.log({ message: 'asset_bought_with_all_usdt_successfully', asset });
@@ -530,8 +530,8 @@ async function convertAllToUSDT(spotClient: Spot, walletClient: Wallet) {
                 try {
                     await spotClient.restAPI.newOrder({
                         symbol: `${coin}USDT`,
-                        side: 'SELL',
-                        type: 'MARKET',
+                        side: SpotRestAPI.NewOrderSideEnum.SELL,
+                        type: SpotRestAPI.NewOrderTypeEnum.MARKET,
                         quantity: Math.floor(coinBalance.toNumber()), // LOT_SIZE 步长为 1，所以要向下取整
                     });
                     console.log({ message: 'asset_converted_to_usdt_successfully', asset: coin });
